@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>⚔ CIVITAS</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 100vw; height: 100vh;
+      display: flex; flex-direction: column;
+      background: #0d1117; color: #c9d1d9;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      overflow: hidden; font-size: 12px;
+    }
+
+    /* ── Toolbar ───────────────────────────────────────────────── */
+    #toolbar {
+      display: flex; align-items: center; gap: 7px;
+      padding: 4px 10px;
+      background: #161b22; border-bottom: 1px solid #30363d;
+      flex-shrink: 0; flex-wrap: wrap;
+    }
+    #toolbar .title  { font-size: 15px; font-weight: 800; color: #f0883e; letter-spacing: 1.5px; }
+    #toolbar .divider { color: #30363d; }
+    #lbl-year        { color: #8b949e; font-size: 9px; }
+    #lbl-nations     { color: #58a6ff; font-size: 9px; }
+    #lbl-wars        { color: #f85149; font-size: 9px; font-weight: 600; }
+    #lbl-zoom        { color: #484f58; font-size: 8px; }
+    .spacer          { flex: 1; }
+
+    button, select {
+      cursor: pointer; font-family: inherit; font-size: 9px;
+      border-radius: 4px; border: none; font-weight: 600;
+    }
+    .btn { background: #30363d; color: #fff; padding: 3px 8px; }
+    .btn:hover { filter: brightness(1.2); }
+    .btn-green  { background: #238636; }
+    .btn-red    { background: #da3633; }
+    .btn-purple { background: #6c5ce7; }
+    select {
+      background: #21262d; color: #c9d1d9;
+      border: 1px solid #30363d; padding: 2px 5px;
+    }
+    label.chk { font-size: 8px; color: #8b949e; cursor: pointer; display: flex; align-items: center; gap: 3px; }
+
+    /* ── Settings panel ────────────────────────────────────────── */
+    #settings-panel {
+      display: none; flex-wrap: wrap; align-items: center; gap: 14px;
+      background: #161b22; border-bottom: 1px solid #30363d;
+      padding: 6px 14px; font-size: 9px; color: #8b949e;
+      flex-shrink: 0;
+    }
+    #settings-panel label { display: flex; align-items: center; gap: 4px; }
+    #settings-panel input[type=range] { width: 55px; vertical-align: middle; }
+    #settings-panel .val { min-width: 20px; }
+
+    /* ── Main area ─────────────────────────────────────────────── */
+    #main { display: flex; flex: 1; overflow: hidden; }
+
+    /* ── Map pane ──────────────────────────────────────────────── */
+    #map-wrap {
+      flex: 1; position: relative; overflow: hidden; background: #080c12;
+    }
+    #map { cursor: grab; display: block; }
+    #map:active { cursor: grabbing; }
+
+    #tooltip {
+      display: none; position: absolute; pointer-events: none;
+      background: rgba(13,17,23,.95); border: 1px solid #30363d;
+      border-radius: 4px; padding: 4px 7px; font-size: 8px;
+      line-height: 1.6; min-width: 110px; z-index: 10;
+    }
+    .tt-coord { color: #6e7681; }
+
+    #zoom-btns {
+      position: absolute; bottom: 6px; right: 6px;
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .zbtn {
+      width: 24px; height: 24px; font-size: 13px;
+      background: rgba(22,27,34,.92); color: #c9d1d9;
+      border: 1px solid #30363d; border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; font-family: inherit;
+    }
+    .zbtn:hover { filter: brightness(1.3); }
+
+    /* ── Sidebar ───────────────────────────────────────────────── */
+    #sidebar {
+      width: 250px; flex-shrink: 0;
+      background: #161b22; border-left: 1px solid #30363d;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+
+    #nation-scroll { flex: 1; overflow-y: auto; padding: 5px; }
+
+    .section-label {
+      font-size: 7px; color: #8b949e; font-weight: 700;
+      margin-bottom: 3px; text-transform: uppercase; letter-spacing: 1px;
+    }
+
+    .civ-row {
+      padding: 3px 4px; margin-bottom: 1px;
+      border-radius: 3px; cursor: pointer;
+    }
+    .civ-row:hover   { background: rgba(56,139,253,.06); }
+    .civ-row.selected { background: rgba(56,139,253,.12); }
+    .civ-row.fallen  { opacity: .4; font-size: 7px; }
+    .civ-row-top { display: flex; align-items: center; gap: 3px; }
+    .civ-name  { font-size: 9px; font-weight: 600; color: #e6edf3; }
+    .civ-sub   { font-size: 7px; color: #484f58; padding-left: 10px; }
+    .civ-size  { font-size: 7px; color: #6e7681; margin-left: auto; }
+    .dot { width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0; }
+    .war-badge  { font-size: 6px; color: #f85149; font-weight: 800; }
+
+    #fallen-header { font-size: 7px; color: #484f58; font-weight: 700; margin-top: 5px; text-transform: uppercase; letter-spacing: 1px; }
+
+    /* ── Civ detail ────────────────────────────────────────────── */
+    #civ-detail {
+      border-top: 1px solid #30363d;
+      padding: 6px; max-height: 300px; overflow-y: auto;
+      background: #0d1117; font-size: 9px;
+    }
+    .detail-header { display: flex; align-items: center; gap: 3px; margin-bottom: 3px; }
+    .detail-name   { font-size: 11px; font-weight: 700; color: #e6edf3; }
+    .detail-sub    { font-size: 7px; color: #6e7681; margin-bottom: 2px; }
+    .detail-stats  { color: #8b949e; line-height: 1.7; margin-bottom: 3px; }
+    .detail-section-label { font-size: 7px; color: #6e7681; font-weight: 700; margin-top: 3px; }
+    .war-label     { color: #f85149; }
+    .detail-city   { font-size: 7px; color: #8b949e; line-height: 1.4; cursor: pointer; padding: 1px 2px; border-radius: 2px; }
+    .detail-city:hover { background: rgba(56,139,253,.08); }
+    .detail-city.city-selected { background: rgba(200,160,0,.15); border-left: 2px solid #c8a000; }
+    .detail-city span { color: #484f58; }
+    .detail-war    { font-size: 7px; color: #f85149; }
+    .detail-peace  { font-size: 7px; color: #3fb950; margin-top: 2px; }
+    .detail-event  { font-size: 7px; color: #8b949e; line-height: 1.2; }
+    .fallen-badge  { font-size: 7px; color: #da3633; font-weight: 700; }
+
+    /* ── Event log ─────────────────────────────────────────────── */
+    #event-log-wrap {
+      border-top: 1px solid #30363d;
+      padding: 4px; max-height: 90px; overflow-y: auto;
+      font-size: 7px; color: #6e7681; line-height: 1.3;
+      background: #0d1117; flex-shrink: 0;
+    }
+    .log-label { font-weight: 700; color: #8b949e; margin-bottom: 1px; text-transform: uppercase; letter-spacing: 1px; font-size: 7px; }
+    .log-line  { border-bottom: 1px solid #1c2028; padding-bottom: 1px; margin-bottom: 1px; }
+
+    /* ── Scrollbars ────────────────────────────────────────────── */
+    ::-webkit-scrollbar       { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+  </style>
+</head>
+<body>
+
+<!-- Toolbar -->
+<div id="toolbar">
+  <span class="title">⚔ CIVITAS</span>
+  <span id="lbl-year">Year 0</span>
+  <span class="divider">│</span>
+  <span id="lbl-nations">0 nations</span>
+  <span id="lbl-wars"></span>
+  <span id="lbl-zoom">1.0×</span>
+  <div class="spacer"></div>
+  <button id="btn-mapmode" class="btn">🌍 Ter</button>
+  <button id="btn-play"    class="btn btn-green">▶</button>
+  <select id="sel-speed">
+    <option value="0.5">½×</option>
+    <option value="1" selected>1×</option>
+    <option value="2">2×</option>
+    <option value="4">4×</option>
+  </select>
+  <button id="btn-reset"    class="btn">🔄</button>
+  <button id="btn-settings" class="btn">⚙</button>
+  <label class="chk"><input type="checkbox" id="chk-res" checked /> Res</label>
+</div>
+
+<!-- Settings panel -->
+<div id="settings-panel">
+  <label>River Pref
+    <input type="range" data-param="river_pref" min="0" max="6" step="0.5" value="3" />
+    <span class="val">3</span>
+  </label>
+  <label>Coast Pref
+    <input type="range" data-param="coast_pref" min="0" max="6" step="0.5" value="2.5" />
+    <span class="val">2.5</span>
+  </label>
+  <label>Max Civs
+    <input type="range" data-param="max_civs" min="4" max="25" step="1" value="14" />
+    <span class="val">14</span>
+  </label>
+  <label>Spawn /
+    <input type="range" data-param="spawn_rate" min="15" max="80" step="5" value="35" />
+    <span class="val">35</span>yr
+  </label>
+</div>
+
+<!-- Main -->
+<div id="main">
+
+  <!-- Map -->
+  <div id="map-wrap">
+    <canvas id="map"></canvas>
+    <div id="tooltip"></div>
+    <div id="zoom-btns">
+      <button class="zbtn" id="btn-zoom-in">+</button>
+      <button class="zbtn" id="btn-zoom-out">−</button>
+      <button class="zbtn" id="btn-zoom-reset">⌂</button>
+    </div>
+  </div>
+
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div id="nation-scroll">
+      <div class="section-label">Nations</div>
+      <div id="nation-list"></div>
+      <div id="fallen-header" style="display:none" class="section-label" style="margin-top:5px">Fallen</div>
+      <div id="fallen-list"></div>
+    </div>
+    <div id="civ-detail"></div>
+    <div id="event-log-wrap">
+      <div class="log-label">Events</div>
+      <div id="event-log"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Connection status for debugging -->
+<div id="conn-status" style="position:fixed;bottom:4px;left:4px;font-size:10px;color:#f85149;z-index:999;font-family:monospace;background:rgba(0,0,0,.8);padding:2px 6px;border-radius:3px;">Loading JS...</div>
+
+<script>
+  // Catch module load errors (e.g. bad MIME type on Windows)
+  window.addEventListener("error", e => {
+    document.getElementById("conn-status").textContent = "JS Error: " + e.message;
+  });
+</script>
+<script type="module" src="/static/ui.js"></script>
+</body>
+</html>

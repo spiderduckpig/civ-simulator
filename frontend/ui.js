@@ -1,0 +1,390 @@
+/**
+ * ui.js — WebSocket client, UI event wiring, game loop
+ * Connects to the FastAPI backend and drives the canvas renderer.
+ */
+
+import { renderFrame, getCellInfo } from "./renderer.js";
+
+const W = 160, H = 100, CELL = 6;
+const PX_W = W * CELL, PX_H = H * CELL;
+
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+const canvas       = document.getElementById("map");
+const ctx          = canvas.getContext("2d");
+const btnPlay      = document.getElementById("btn-play");
+const btnReset     = document.getElementById("btn-reset");
+const selSpeed     = document.getElementById("sel-speed");
+const btnMapMode   = document.getElementById("btn-mapmode");
+const chkRes       = document.getElementById("chk-res");
+const zoomIn       = document.getElementById("btn-zoom-in");
+const zoomOut      = document.getElementById("btn-zoom-out");
+const zoomReset    = document.getElementById("btn-zoom-reset");
+const lblYear      = document.getElementById("lbl-year");
+const lblNations   = document.getElementById("lbl-nations");
+const lblWars      = document.getElementById("lbl-wars");
+const lblZoom      = document.getElementById("lbl-zoom");
+const tooltip      = document.getElementById("tooltip");
+const nationList   = document.getElementById("nation-list");
+const fallenList   = document.getElementById("fallen-list");
+const civDetail    = document.getElementById("civ-detail");
+const eventLog     = document.getElementById("event-log");
+const settingsPanel = document.getElementById("settings-panel");
+const btnSettings  = document.getElementById("btn-settings");
+
+// ── Client state ──────────────────────────────────────────────────────────────
+let mapData    = null;
+let gameState  = { civs: [], wars: [], impr: [], tick: 0, log: [] };
+let playing    = false;
+let mapMode    = "terrain";
+let zoom       = 1;
+let viewOffset = { x: 0, y: 0 };
+let isDragging = false;
+let dragStart  = { x: 0, y: 0 };
+let selectedId   = null;
+let selectedCity = null;  // city object when a city cell is clicked
+let ws           = null;
+
+// Size canvas to fill its container, re-run on resize
+const mapWrap = document.getElementById("map-wrap");
+function resizeCanvas() {
+    canvas.width  = mapWrap.clientWidth;
+    canvas.height = mapWrap.clientHeight;
+    renderAll();
+}
+resizeCanvas();
+new ResizeObserver(resizeCanvas).observe(mapWrap);
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+
+const connStatus = document.getElementById("conn-status");
+
+function connect() {
+    connStatus.textContent = "Connecting...";
+    connStatus.style.color = "#f0c040";
+    ws = new WebSocket(`ws://${location.host}/ws`);
+
+    ws.onopen = () => {
+        connStatus.textContent = "Generating map...";
+        connStatus.style.color = "#58a6ff";
+    };
+
+    ws.onerror = (e) => {
+        connStatus.textContent = "WebSocket error";
+        connStatus.style.color = "#f85149";
+        console.error("WebSocket error:", e);
+    };
+
+    ws.onmessage = ({ data }) => {
+        const msg = JSON.parse(data);
+        if (msg.type === "map") {
+            mapData = msg;
+            mapData.rivers.cell_river = new Set(msg.rivers.cell_river);
+            connStatus.textContent = "Map received";
+            connStatus.style.color = "#3fb950";
+        } else if (msg.type === "state") {
+            gameState = msg;
+            connStatus.style.display = "none"; // hide once running
+            // Convert territory arrays to plain arrays (already serialised as arrays from backend)
+            renderAll();
+            updateUI();
+        }
+    };
+
+    ws.onclose = () => {
+        setTimeout(connect, 1000); // auto-reconnect
+    };
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+
+function renderAll() {
+    if (!mapData) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(viewOffset.x, viewOffset.y);
+    ctx.scale(zoom, zoom);
+    renderFrame(ctx, mapData, gameState, {
+        showRes: chkRes.checked,
+        mapMode,
+        tick: gameState.tick,
+        zoom,
+        selectedCity,
+    });
+    ctx.restore();
+}
+
+// ── UI updates ────────────────────────────────────────────────────────────────
+
+function updateUI() {
+    const alive = gameState.civs.filter(c => c.alive);
+    const wars  = gameState.wars;
+
+    lblYear.textContent    = `Year ${gameState.tick}`;
+    lblNations.textContent = `${alive.length} nations`;
+    lblWars.textContent    = wars.length > 0 ? `⚔${wars.length}` : "";
+    lblZoom.textContent    = `${zoom.toFixed(1)}×`;
+
+    // Nation list
+    const sorted = [...alive].sort((a, b) => b.territory.length - a.territory.length);
+    nationList.innerHTML = sorted.map(civ => {
+        const atWar = wars.some(w => w.a_id === civ.id || w.d_id === civ.id);
+        const sel   = civ.id === selectedId;
+        return `
+        <div class="civ-row${sel ? " selected" : ""}" data-id="${civ.id}">
+            <div class="civ-row-top">
+                <span class="dot" style="background:${civ.color};${atWar ? "box-shadow:0 0 3px #f85149" : ""}"></span>
+                <span class="civ-name">${civ.name}</span>
+                ${atWar ? '<span class="war-badge">WAR</span>' : ""}
+                <span class="civ-size">${civ.territory.length}</span>
+            </div>
+            <div class="civ-sub">${civ.cities.length}c · ${civ.population|0}p · ₿${civ.wealth|0}</div>
+        </div>`;
+    }).join("");
+
+    // Fallen
+    const fallen = gameState.civs.filter(c => !c.alive).slice(-5);
+    document.getElementById("fallen-header").style.display = fallen.length ? "" : "none";
+    fallenList.innerHTML = fallen.map(c =>
+        `<div class="civ-row fallen" data-id="${c.id}"><span style="color:${c.color}">†</span> ${c.name} (${c.age}yr)</div>`
+    ).join("");
+
+    // Event log
+    const logLines = [...gameState.log].reverse().slice(0, 10);
+    eventLog.innerHTML = logLines.map(e => `<div class="log-line">${e}</div>`).join("");
+
+    // Civ detail panel
+    if (selectedId !== null) {
+        const civ = gameState.civs.find(c => c.id === selectedId);
+        renderCivDetail(civ, wars);
+    }
+
+    // Attach click handlers to civ rows
+    document.querySelectorAll(".civ-row[data-id]").forEach(el => {
+        el.addEventListener("click", () => {
+            selectedId = parseInt(el.dataset.id);
+            selectedCity = null;
+            updateUI();
+            renderAll();
+        });
+    });
+
+    // Attach click handlers to city rows in detail panel
+    document.querySelectorAll(".detail-city[data-city-cell]").forEach(el => {
+        el.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const cellId = parseInt(el.dataset.cityCell);
+            const civ2 = gameState.civs.find(c => c.id === selectedId);
+            if (civ2) {
+                const city = civ2.cities.find(c => c.cell === cellId);
+                selectedCity = (selectedCity && selectedCity.cell === cellId) ? null : city;
+                updateUI();
+                renderAll();
+            }
+        });
+    });
+}
+
+function renderCivDetail(civ, wars) {
+    if (!civ) { civDetail.innerHTML = ""; return; }
+    const myWars = wars.filter(w => w.a_id === civ.id || w.d_id === civ.id);
+    const warInfo = myWars.length
+        ? myWars.map(w => {
+            const eid = w.a_id === civ.id ? w.d_id : w.a_id;
+            const en  = gameState.civs.find(c => c.id === eid);
+            const dur = gameState.tick - w.start_tick;
+            return `<div class="detail-war">${en?.name ?? "?"} (${w.a_id === civ.id ? "aggr" : "def"} ${dur}yr)</div>`;
+          }).join("")
+        : `<div class="detail-peace">🕊 Peace</div>`;
+
+    const cities = [...civ.cities]
+        .sort((a, b) => b.population - a.population)
+        .map(c => {
+            const isSel = selectedCity && selectedCity.cell === c.cell;
+            const pct = c.carrying_cap > 0 ? Math.min(100, (c.population / c.carrying_cap * 100) | 0) : 0;
+            const capColor = pct > 90 ? "#f85149" : pct > 70 ? "#f0c040" : "#3fb950";
+            return `<div class="detail-city${isSel ? " city-selected" : ""}" data-city-cell="${c.cell}">
+                ${c.is_capital ? "★" : "•"} <b>${c.name}</b>
+                <span>${c.population|0}/<span style="color:${capColor}">${c.carrying_cap|0}</span>
+                🍞${c.food_production|0} 📦${c.trade|0}
+                ${c.near_river ? "〰" : ""}${c.coastal ? "⚓" : ""}</span>
+            </div>`;
+        })
+        .join("");
+
+    const history = civ.events.slice(-4)
+        .map(e => `<div class="detail-event">• ${e}</div>`)
+        .join("");
+
+    civDetail.innerHTML = `
+        <div class="detail-header">
+            <span class="dot" style="background:${civ.color}"></span>
+            <span class="detail-name">${civ.name}</span>
+            ${!civ.alive ? '<span class="fallen-badge">FALLEN</span>' : ""}
+        </div>
+        ${civ.parent_name ? `<div class="detail-sub">From ${civ.parent_name}</div>` : ""}
+        <div class="detail-stats">
+            <div>👑 ${civ.leader}</div>
+            <div>👥 ${civ.population|0} · ⚔ ${civ.military|0} · 📐 ${civ.territory.length}</div>
+            <div>💰 ${civ.gold|0} · ₿ <span style="color:#f0c040">${civ.wealth|0}</span> · 🍞 ${civ.food|0}</div>
+            <div>🔬 ${civ.tech.toFixed(1)} · 🎭 ${civ.culture.toFixed(1)}</div>
+            <div>🛡 <span style="color:${civ.integrity > 0.6 ? "#3fb950" : "#f85149"}">${(civ.integrity*100)|0}%</span> · ${civ.peacefulness > 0.5 ? "🕊" : "⚔"}${(civ.peacefulness*100)|0}%</div>
+            <div>🌾${civ.farm_output|0} ⛏${civ.mine_output|0} 📦${civ.trade_output|0} 🛤${civ.roads.length}</div>
+        </div>
+        ${cities ? `<div class="detail-section-label">CITIES (${civ.cities.length})</div>${cities}` : ""}
+        ${myWars.length ? `<div class="detail-section-label war-label">⚔ WARS</div>${warInfo}` : warInfo}
+        ${history ? `<div class="detail-section-label">HISTORY</div>${history}` : ""}
+    `;
+}
+
+// ── Canvas interaction ────────────────────────────────────────────────────────
+
+canvas.addEventListener("wheel", e => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const d  = e.deltaY > 0 ? 0.88 : 1.14;
+    const nz = Math.max(0.3, Math.min(6, zoom * d));
+    const s  = nz / zoom;
+    viewOffset.x = mx - (mx - viewOffset.x) * s;
+    viewOffset.y = my - (my - viewOffset.y) * s;
+    zoom = nz;
+    lblZoom.textContent = `${zoom.toFixed(1)}×`;
+    renderAll();
+}, { passive: false });
+
+canvas.addEventListener("mousedown", e => {
+    isDragging = true;
+    dragStart  = { x: e.clientX, y: e.clientY };
+});
+canvas.addEventListener("mouseup",    () => isDragging = false);
+canvas.addEventListener("mouseleave", () => { isDragging = false; tooltip.style.display = "none"; });
+
+canvas.addEventListener("mousemove", e => {
+    const rect = canvas.getBoundingClientRect();
+    if (isDragging) {
+        viewOffset.x += e.clientX - dragStart.x;
+        viewOffset.y += e.clientY - dragStart.y;
+        dragStart = { x: e.clientX, y: e.clientY };
+        renderAll();
+        return;
+    }
+    if (!mapData) return;
+    const mx  = (e.clientX - rect.left - viewOffset.x) / zoom;
+    const my  = (e.clientY - rect.top  - viewOffset.y) / zoom;
+    const gx  = (mx / CELL) | 0;
+    const gy  = (my / CELL) | 0;
+    if (gx < 0 || gx >= W || gy < 0 || gy >= H) { tooltip.style.display = "none"; return; }
+    const info = getCellInfo(mapData, gameState, gy * W + gx);
+    showTooltip(e.clientX - rect.left, e.clientY - rect.top, info);
+});
+
+canvas.addEventListener("click", e => {
+    if (isDragging) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx  = (e.clientX - rect.left - viewOffset.x) / zoom;
+    const my  = (e.clientY - rect.top  - viewOffset.y) / zoom;
+    const gx  = (mx / CELL) | 0;
+    const gy  = (my / CELL) | 0;
+    if (gx < 0 || gx >= W || gy < 0 || gy >= H || !gameState) return;
+    const cell = gy * W + gx;
+    const om = new Int32Array(W * H);
+    for (const civ of gameState.civs) {
+        if (!civ.alive) continue;
+        for (const c of civ.territory) om[c] = civ.id;
+    }
+    selectedId = om[cell] || null;
+
+    // Check if clicked on a city cell
+    selectedCity = null;
+    if (selectedId) {
+        const civ = gameState.civs.find(c => c.id === selectedId);
+        if (civ) {
+            const city = civ.cities.find(c => c.cell === cell);
+            if (city) selectedCity = city;
+        }
+    }
+    updateUI();
+    renderAll();
+});
+
+function showTooltip(x, y, info) {
+    const lines = [
+        `<div class="tt-coord">(${info.x},${info.y}) ${info.terrain} ${info.alt}m</div>`,
+        info.river   ? `<div style="color:#4aaef0">〰 River</div>` : "",
+        info.coastal ? `<div style="color:#1a6a9e">⚓ Coastal</div>` : "",
+        info.imp !== "—" ? `<div style="color:#c8a000">${info.imp}</div>` : "",
+        info.res   ? `<div>${info.res}</div>` : "",
+        info.civ   ? `<div style="color:${info.civ.color};font-weight:600">${info.civ.name}</div>` : "",
+        info.city  ? `<div>🏘 ${info.city.name}${info.city.is_capital ? " ★" : ""} (pop ${info.city.pop}/${info.city.cap})</div>
+                      <div style="color:#8b949e">🍞${info.city.food} 📦${info.city.trade} 💰${info.city.wealth}</div>` : "",
+    ].filter(Boolean).join("");
+    tooltip.innerHTML = lines;
+    tooltip.style.display = "block";
+    tooltip.style.left = `${x + 10}px`;
+    tooltip.style.top  = `${y + 10}px`;
+}
+
+// ── Zoom buttons ──────────────────────────────────────────────────────────────
+
+function applyZoom(factor) {
+    const cx = canvas.width  / 2;
+    const cy = canvas.height / 2;
+    const nz = Math.max(0.3, Math.min(6, zoom * factor));
+    const s  = nz / zoom;
+    viewOffset.x = cx - (cx - viewOffset.x) * s;
+    viewOffset.y = cy - (cy - viewOffset.y) * s;
+    zoom = nz;
+    lblZoom.textContent = `${zoom.toFixed(1)}×`;
+    renderAll();
+}
+
+zoomIn.addEventListener("click",    () => applyZoom(1.3));
+zoomOut.addEventListener("click",   () => applyZoom(1 / 1.3));
+zoomReset.addEventListener("click", () => { zoom = 1; viewOffset = { x: 0, y: 0 }; renderAll(); });
+
+// ── Controls ──────────────────────────────────────────────────────────────────
+
+btnPlay.addEventListener("click", () => {
+    playing = !playing;
+    btnPlay.textContent = playing ? "⏸" : "▶";
+    btnPlay.style.background = playing ? "#da3633" : "#238636";
+    ws.send(JSON.stringify({ action: playing ? "play" : "pause" }));
+});
+
+btnReset.addEventListener("click", () => {
+    playing = false;
+    btnPlay.textContent   = "▶";
+    btnPlay.style.background = "#238636";
+    ws.send(JSON.stringify({ action: "reset" }));
+});
+
+selSpeed.addEventListener("change", () => {
+    ws.send(JSON.stringify({ action: "speed", value: parseFloat(selSpeed.value) }));
+});
+
+btnMapMode.addEventListener("click", () => {
+    mapMode = mapMode === "terrain" ? "political" : "terrain";
+    btnMapMode.textContent = mapMode === "political" ? "🗺 Pol" : "🌍 Ter";
+    btnMapMode.style.background = mapMode === "political" ? "#6c5ce7" : "#30363d";
+    renderAll();
+});
+
+chkRes.addEventListener("change", renderAll);
+
+btnSettings.addEventListener("click", () => {
+    settingsPanel.style.display = settingsPanel.style.display === "none" ? "flex" : "none";
+    btnSettings.style.background = settingsPanel.style.display !== "none" ? "#58a6ff" : "#30363d";
+});
+
+// Settings sliders
+document.querySelectorAll("[data-param]").forEach(el => {
+    const label = el.nextElementSibling;
+    el.addEventListener("input", () => {
+        if (label) label.textContent = el.value;
+        ws.send(JSON.stringify({ action: "params", values: { [el.dataset.param]: parseFloat(el.value) } }));
+    });
+});
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+connect();
