@@ -509,8 +509,8 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
         for (const city of civ.cities) {
             const cx = city.cell % W, cy = (city.cell / W) | 0;
             const px = cx * CELL + CELL / 2, py = cy * CELL + CELL / 2;
-            const rawSz = Math.sqrt(city.population) * 0.065;
-            const sz = Math.max(1.3, Math.min(7.5, rawSz));
+            const rawSz = Math.sqrt(city.population) * 0.045;
+            const sz = Math.max(0.8, Math.min(7.5, rawSz));
             const showLabel = city.is_capital || (zoom >= 1.5 && city.population > 60) || zoom >= 2.5;
 
             if (city.is_capital) {
@@ -684,7 +684,7 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
 
             // Background banner — colored shield/circle scaled to army strength
             const sFrac = Math.max(0, Math.min(1, army.strength / Math.max(1, army.max_strength)));
-            const baseR = 3 + Math.sqrt(army.max_strength) * 0.18;
+            const baseR = 1.5 + Math.sqrt(army.max_strength) * 0.09;
 
             // Outer ring (civ color)
             ctx.fillStyle = army.color;
@@ -692,11 +692,11 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
             ctx.arc(px, py, baseR, 0, Math.PI * 2);
             ctx.fill();
             ctx.strokeStyle = "rgba(0,0,0,.85)";
-            ctx.lineWidth = 0.8;
+            ctx.lineWidth = 0.6;
             ctx.stroke();
 
             // Inner sword icon
-            const fs = Math.max(7, baseR * 1.7);
+            const fs = Math.max(5, baseR * 1.5);
             ctx.font         = `bold ${fs}px sans-serif`;
             ctx.textAlign    = "center";
             ctx.textBaseline = "middle";
@@ -704,8 +704,8 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
             ctx.fillText("⚔", px, py + 0.5);
 
             // Health bar above the icon
-            const bw = Math.max(8, baseR * 2.4);
-            const bh = 1.4;
+            const bw = Math.max(6, baseR * 2.2);
+            const bh = 1.0;
             const bx = px - bw / 2;
             const by = py - baseR - bh - 1;
             ctx.fillStyle = "rgba(0,0,0,.7)";
