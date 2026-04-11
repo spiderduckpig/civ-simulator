@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(timeout 20 python -c \":*)",
+      "Bash(timeout 30 python -c \":*)",
+      "Bash(timeout 10 python -c \":*)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''backend/engine/simulation.py'', doraise=True\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''backend/engine/civ.py'', doraise=True\\)\")",
+      "Bash(node --check frontend/renderer.js)",
+      "Bash(node --check frontend/ui.js)",
+      "Bash(cp frontend/renderer.js frontend/renderer.js.before_recovery)",
+      "Bash(python .recover_renderer.py)",
+      "Bash(node -c frontend/ui.js)",
+      "Bash(node -c frontend/renderer.js)",
+      "Bash(python .recovery.py \"renderer.js\" \"C:/Users/brian/.claude/projects/c--Users-brian--vscode-2026projects-civ-simulator/962615d8-da57-46e5-a5c2-3d056697cb10.jsonl\")",
+      "Bash(awk '/ts=2026-04-11T07:30:00/,/END EDIT/')",
+      "Bash(python .recovery.py \"simulation.py\" \"C:/Users/brian/.claude/projects/c--Users-brian--vscode-2026projects-civ-simulator/962615d8-da57-46e5-a5c2-3d056697cb10.jsonl\")",
+      "Bash(python .recovery.py \"constants.py\" \"C:/Users/brian/.claude/projects/c--Users-brian--vscode-2026projects-civ-simulator/962615d8-da57-46e5-a5c2-3d056697cb10.jsonl\")",
+      "Bash(cp backend/engine/helpers.py backend/engine/helpers.py.before_recovery)",
+      "Bash(python .recover_backend.py)"
+    ]
+  }
+}

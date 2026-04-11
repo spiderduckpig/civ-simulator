@@ -1,0 +1,9 @@
+{
+    "PRE": ["Vis","Visla","Siri","Syr","Amus","Amu ","Ess","Essar","Sol","Solno","Alsolno","Javir","Jav","Jaeso","Qua","Quera","Elle","El","Enno","En","Kiro","Ki","Kas","Lora","Lire","Corel","Cora","Chama","Kana","Kanar","Lisa","Lis","Loso","Lase"],
+    "MID_S": ["an","en","in","on","un","ael","eil","ion","or","yl","al","eb","osh","il"],
+    "SUF_S": ["ia","iel","ien","ion","ir","is","or","us","ya","yl","ira","irion","iriel","ave","acre","akyr","atyr","etal","eten","otoa"],
+    "CPRE": ["Star ","High ","Low ","West ","","","","","","","","","","","","","","","","","",""],
+    "CSUF": ["","","","","hel","al","tal","em","on","a","e","i","ir","is","il","","","an"],
+    "LF": ["Iskera","Ishmar","Isha","Wavme","Wisir","Visne","Vispa","Vaisna","Bioson","Bhores","Murion","Musgal","Evgel","Evion","Lissara","Lissel","Liszal","Limiar","Naelar","Nassira","Nomos","Novis","Silvarn","Silisar","Simiena","Qora","Zinela","Zashan","Zahvira","Celis"],
+    "LL": ["the Fair","the Bright","Starwhisper","Moonshadow","Silverleaf","the Swift","the Ancient","Windrider","Dawnchaser","the Serene","the Graceful","Lightbringer"]
+}

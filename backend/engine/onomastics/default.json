@@ -1,0 +1,9 @@
+{
+    "PRE": ["Ar","Bal","Cor","Dra","El","Fal","Gor","Ha","Ith","Jar","Kel","Lor","Mar","Nor","Or","Par","Qar","Ren","Sol","Tar","Ul","Val","Wor","Xen","Yr","Zan","Ak","Bri","Cael","Dur","Esh","Fen","Gil","Hel","Iro","Jul","Kha","Lun","Myr","Niv","Osh","Pyr","Rha","Syr","Thal","Ur","Ves","Wyn","Xar","Yth","Zul"],
+    "MID_S": ["an","eth","in","on","ul","ash","ith","or","en","al","os","ur","ak","em","id","ar","el","ok","un","is"],
+    "SUF_S": ["ia","os","um","is","ar","en","oth","ax","ium","ica","esh","and","or","heim","gard","rok","ven","dale","mere","hold","stan","land","rea","nia","tia"],
+    "CPRE": ["New ","Fort ","Port ","Saint ","North ","South ","East ","West ","Old ","Great ","","","","","","","","","",""],
+    "CSUF": ["ton","burg","ville","haven","ford","field","gate","bridge","keep","watch","holm","stead","crest","fall","shore","wood","vale","moor","peak","port","bay","well","dale"],
+    "LF": ["Arak","Belen","Cyra","Dorn","Eska","Fenn","Gael","Hira","Ivak","Jael","Kira","Lorn","Mira","Nael","Orik","Pala","Rath","Sela","Tarn","Ula","Vorn","Wyra","Xael","Yara","Zorn","Alys","Bram","Cassia","Theron","Lysa","Magnus","Freya"],
+    "LL": ["the Bold","the Wise","Ironhand","Stormborn","Goldeneye","the Just","the Cruel","the Great","the Conqueror","Peacemaker","the Silent","Sunbringer","the Unyielding","the Cunning","the Mad","the Young"]
+}

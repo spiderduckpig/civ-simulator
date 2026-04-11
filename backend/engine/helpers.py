@@ -1,8 +1,12 @@
 import math
+import heapq
 from collections import deque
-from typing import Set, List, Tuple, Optional, Dict
+from typing import Set, List, Tuple, Optional, Dict, Iterable
 
-from .constants import W, H, N, T, IMP, CAN_FARM
+from .constants import W, H, N, T
+
+def cell_on_river(cell: int, rivers: dict) -> bool:
+    return cell in rivers["cell_river"]
 
 
 # ── Grid utilities ──────────────────────────────────────────────────────────
@@ -52,18 +56,36 @@ def war_key(a: int, b: int) -> str:
     return f"{lo}|{hi}"
 
 
-# ── Pathfinding (BFS) ────────────────────────────────────────────────────────
+# ── Pathfinding (Dijkstra, bends toward cities) ─────────────────────────────
 
 def find_path(
     from_cell: int,
     to_cell: int,
     territory: Set[int],
     ter: list,
+    city_cells: Set[int] = None,
+    road_cells: Set[int] = None,
 ) -> Optional[List[int]]:
+    """Weighted shortest path. Cells near cities are cheaper so roads
+    naturally route through intermediate towns.  Existing road cells
+    are nearly free so new roads merge onto the existing network."""
+    if city_cells is None:
+        city_cells = set()
+    if road_cells is None:
+        road_cells = set()
+
+    # Pre-compute cheap cells: city cells and their neighbors
+    near_city = set()
+    for cc in city_cells:
+        for n in neighbors(cc):
+            near_city.add(n)
+
+    costs: Dict[int, float] = {from_cell: 0.0}
     prev: Dict[int, int] = {from_cell: -1}
-    queue = deque([from_cell])
-    while queue:
-        cur = queue.popleft()
+    heap = [(0.0, from_cell)]
+
+    while heap:
+        cost, cur = heapq.heappop(heap)
         if cur == to_cell:
             path = []
             c = to_cell
@@ -72,10 +94,25 @@ def find_path(
                 c = prev[c]
             path.reverse()
             return path
+        if cost > costs.get(cur, float("inf")):
+            continue
         for n in neighbors(cur):
-            if n not in prev and n in territory and ter[n] != T.MTN and ter[n] != T.SNOW:
+            if n not in territory or ter[n] == T.MTN or ter[n] == T.SNOW:
+                continue
+            # Movement cost: existing roads are nearly free, cities are cheap
+            if n in road_cells:
+                step = 0.05
+            elif n in city_cells:
+                step = 0.1
+            elif n in near_city:
+                step = 0.3
+            else:
+                step = 1.0
+            nc = cost + step
+            if nc < costs.get(n, float("inf")):
+                costs[n] = nc
                 prev[n] = cur
-                queue.append(n)
+                heapq.heappush(heap, (nc, n))
     return None
 
 
@@ -102,24 +139,129 @@ def find_regions(cells) -> List[List[int]]:
     return regions
 
 
-# ── Improvement selection ────────────────────────────────────────────────────
+# ── Land pathfinding ─────────────────────────────────────────────────────────
+# Two variants over the walkable-land mask:
+#   - land_bfs_path: plain BFS, returns shortest path in step count.
+#     Kept for flood-fill-ish callers that want predictable radial expansion.
+#   - land_astar_path: A* with Manhattan heuristic. Same result on this
+#     uniform-cost 4-connected grid (Manhattan is tight admissible), but
+#     explores O(d) cells in open terrain instead of O(d²). Preferred for
+#     per-tick army movement where long targets are common.
+# Both take a `blocked` wall set and a `frontier_budget` hard cap so a
+# single unreachable target can never pin the sim.
 
-def best_improvement(ter: list, res: dict, cell: int) -> int:
-    t = ter[cell]
-    r = res.get(cell)
+def _land_walkable(ter: list, c: int) -> bool:
+    if c < 0 or c >= N:
+        return False
+    t = ter[c]
+    if t <= T.COAST or t == T.MTN or t == T.SNOW:
+        return False
+    return True
 
-    if t in (T.MTN, T.HILLS):
-        if r in ("iron", "gold", "gems"):
-            return IMP.MINE
-        return IMP.QUARRY
 
-    if t in (T.FOREST, T.DFOREST, T.JUNGLE):
-        return IMP.LUMBER
+def land_bfs_path(
+    from_cell: int,
+    to_cell: int,
+    ter: list,
+    blocked: Optional[Iterable[int]] = None,
+    *,
+    frontier_budget: int = 800,
+) -> Optional[List[int]]:
+    """BFS shortest path over walkable land. Returns None if unreachable or
+    if the frontier budget runs out."""
+    if from_cell == to_cell:
+        return [from_cell]
 
-    if r == "horses":
-        return IMP.PASTURE
+    blocked_set: Set[int] = set(blocked) if blocked else set()
+    blocked_set.discard(to_cell)
 
-    if t in CAN_FARM:
-        return IMP.FARM
+    visited = {from_cell: -1}
+    q: deque = deque([from_cell])
+    expanded = 0
+    while q:
+        cur = q.popleft()
+        expanded += 1
+        if expanded > frontier_budget:
+            return None
+        for n in neighbors(cur):
+            if n in visited:
+                continue
+            if n != to_cell and (not _land_walkable(ter, n) or n in blocked_set):
+                continue
+            visited[n] = cur
+            if n == to_cell:
+                path = [n]
+                p = cur
+                while p != -1:
+                    path.append(p)
+                    p = visited[p]
+                path.reverse()
+                return path
+            q.append(n)
+    return None
 
-    return IMP.NONE
+
+def land_astar_path(
+    from_cell: int,
+    to_cell: int,
+    ter: list,
+    blocked: Optional[Iterable[int]] = None,
+    *,
+    frontier_budget: int = 800,
+) -> Optional[List[int]]:
+    """A* shortest path over walkable land using Manhattan heuristic.
+
+    On our 4-connected uniform-cost grid Manhattan is tight and consistent,
+    so the first pop of the goal is optimal and a closed set is safe.
+    """
+    if from_cell == to_cell:
+        return [from_cell]
+
+    blocked_set: Set[int] = set(blocked) if blocked else set()
+    blocked_set.discard(to_cell)
+
+    tx = to_cell % W
+    ty = to_cell // W
+
+    def h(cell: int) -> int:
+        return abs((cell % W) - tx) + abs((cell // W) - ty)
+
+    parent: Dict[int, int] = {from_cell: -1}
+    g: Dict[int, int] = {from_cell: 0}
+    closed: Set[int] = set()
+    # Heap entries: (f, tiebreak, cell). Tiebreak keeps ordering deterministic
+    # and avoids comparing ints to ints on equal f.
+    open_heap: list = [(h(from_cell), 0, from_cell)]
+    counter = 1
+    expanded = 0
+
+    while open_heap:
+        _, _, cur = heapq.heappop(open_heap)
+        if cur in closed:
+            continue
+        if cur == to_cell:
+            path: List[int] = []
+            c = cur
+            while c != -1:
+                path.append(c)
+                c = parent[c]
+            path.reverse()
+            return path
+        closed.add(cur)
+        expanded += 1
+        if expanded > frontier_budget:
+            return None
+
+        ng = g[cur] + 1
+        for n in neighbors(cur):
+            if n in closed:
+                continue
+            if n != to_cell and (not _land_walkable(ter, n) or n in blocked_set):
+                continue
+            if n in g and ng >= g[n]:
+                continue
+            g[n] = ng
+            parent[n] = cur
+            heapq.heappush(open_heap, (ng + h(n), counter, n))
+            counter += 1
+    return None

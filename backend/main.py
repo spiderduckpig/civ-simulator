@@ -44,7 +44,7 @@ class GameState:
         self.running:   bool = False
         self.speed:     float = 1.0
         self.params:    dict = dict(DEFAULT_PARAMS)
-        self.seed:      int  = 42
+        self.seed:      int  = int(stdlib_random.random() * 99999)
         self.log:       list = []
 
     def add_event(self, msg: str):
@@ -100,12 +100,23 @@ def _ser_civs(civs: list) -> list:
                 "is_capital":     ci["is_capital"],
                 "founded":        ci["founded"],
                 "trade":          round(ci.get("trade", 0), 1),
+                "trade_potential": round(ci.get("trade_potential", 0), 1),
+                "road_trade":     round(ci.get("road_trade", 0), 1),
                 "wealth":         round(ci.get("wealth", 0), 1),
                 "near_river":     ci.get("near_river", False),
                 "coastal":        ci.get("coastal", False),
+                "river_mouth":    ci.get("river_mouth", False),
                 "food_production": round(ci.get("food_production", 0), 1),
+                "city_ore":       round(ci.get("city_ore", 0), 1),
+                "city_stone":     round(ci.get("city_stone", 0), 1),
+                "city_metal":     round(ci.get("city_metal", 0), 1),
+                "focus":          ci.get("focus", 1),
                 "carrying_cap":   round(ci.get("carrying_cap", 50), 0),
+                "tiles":          ci.get("tiles", []),
                 "farm_tiles":     ci.get("farm_tiles", []),
+                "hp":             round(ci.get("hp", 0), 1),
+                "max_hp":         round(ci.get("max_hp", 0), 1),
+                "last_dmg_tick":  ci.get("last_dmg_tick", -999),
             } for ci in c["cities"]],
             "population":     round(c["population"], 1),
             "military":       round(c["military"], 1),
@@ -116,18 +127,43 @@ def _ser_civs(civs: list) -> list:
             "age":            c["age"],
             "alive":          c["alive"],
             "integrity":      round(c["integrity"], 3),
-            "peacefulness":   round(c["peacefulness"], 3),
+            "aggressiveness": round(c.get("aggressiveness", 0.5), 3),
+            "power":          round(c.get("power", 0.0), 1),
+            "relations":      {str(k): round(v, 3) for k, v in c.get("relations", {}).items()},
+            "allies":         sorted(c.get("allies", set())),
             "wealth":         round(c["wealth"], 1),
             "farm_output":    round(c["farm_output"], 1),
-            "mine_output":    round(c["mine_output"], 1),
+            "ore_output":     round(c["ore_output"], 1),
+            "stone_output":   round(c["stone_output"], 1),
+            "metal_output":   round(c["metal_output"], 1),
             "trade_output":   round(c["trade_output"], 1),
             "expansion_rate": round(c["expansion_rate"], 3),
             "events":         c["events"][-10:],
             "parent_name":    c["parent_name"],
             "roads":          [{"from": r["from"], "to": r["to"]} for r in c["roads"]],
             "road_paths":     [r["path"] for r in c["roads"]],
+            "metal_stock":    round(c.get("metal_stock", 0), 1),
         })
     return result
+
+
+def _ser_army(a: dict) -> dict:
+    return {
+        "id":            a["id"],
+        "civ_id":        a["civ_id"],
+        "cell":          a["cell"],
+        "origin_cell":   a["origin_cell"],
+        "fort_level":    a.get("fort_level", 1),
+        "strength":      round(a["strength"], 1),
+        "max_strength":  round(a["max_strength"], 1),
+        "organization":  round(a["organization"], 1),
+        "supply":        round(a["supply"], 1),
+        "commander":     a["commander"],
+        "behavior":      a["behavior"],
+        "objective":     a.get("objective"),
+        "fortification": round(a.get("fortification", 0.0), 3),
+        "fort_source":   a.get("fort_source", "open field"),
+    }
 
 
 def _ser_state(state: GameState) -> dict:
@@ -135,7 +171,18 @@ def _ser_state(state: GameState) -> dict:
         "type":  "state",
         "tick":  state.tick,
         "civs":  _ser_civs(state.civs),
-        "wars":  [{"key": k, **v} for k, v in state.wars.items()],
+        "wars":  [{
+            "key":         k,
+            "a_id":        v["a_id"],
+            "d_id":        v["d_id"],
+            "start_tick":  v["start_tick"],
+            "confidence_a": round(v.get("confidence_a", 0.5), 3),
+            "confidence_d": round(v.get("confidence_d", 0.5), 3),
+            "exhaustion_a": round(v.get("exhaustion_a", 0.0), 3),
+            "exhaustion_d": round(v.get("exhaustion_d", 0.0), 3),
+            "armies_a":    [_ser_army(a) for a in v.get("armies_a", [])],
+            "armies_d":    [_ser_army(a) for a in v.get("armies_d", [])],
+        } for k, v in state.wars.items()],
         "impr":  state.impr,
         "log":   state.log[-20:],
     }
@@ -162,7 +209,10 @@ async def _sim_loop(ws: WebSocket, state: GameState, lock: asyncio.Lock):
                     rng = make_noise(state.seed + t * 13)
                     count = 5 if t == 1 else 1
                     for i in range(count):
-                        nv = make_civ(md["ter"], [c for c in civs if c["alive"]], md["rivers"], rng, t)
+                        nv = make_civ(
+                            md["ter"], [c for c in civs if c["alive"]],
+                            md["rivers"], rng, t, state.om, state.impr,
+                        )
                         if nv:
                             for cell in nv["territory"]:
                                 state.om[cell] = nv["id"]
@@ -261,6 +311,18 @@ async def websocket_endpoint(ws: WebSocket):
 async def health():
     return {"status": "ok"}
 
+
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/static"):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return response
+
+app.add_middleware(NoCacheMiddleware)
 
 app.mount("/static", StaticFiles(directory="../frontend"), name="static")
 

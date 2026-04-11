@@ -1,0 +1,21 @@
+The onomastics dictionary controls how random names are generated for civilizations, their cities, and their leaders. Here is what each key stands for and how they are put together in the code:
+
+Civilization Names
+Generated using PRE + [MID_S] + SUF_S.
+
+PRE (Prefix): The starting syllable/core name for the civilization (e.g., "Ar", "Cor").
+MID_S (Middle Syllable): An optional middle piece that gets injected about 65% of the time to make the name longer (e.g., "Ar-eth-ia").
+SUF_S (State Suffix): The end of the civilization's name (e.g., "Arethia", "Corgard").
+City Names
+Generated using CPRE + (PRE + CSUF).title(). Notice that cities reuse the PRE list so that their cities sound like they belong to the same culture!
+
+PRE (Prefix): The root syllable, recycled from the civilization name list.
+CSUF (City Suffix): The ending of the city name (e.g., "Arburg", "Arville", "Arton").
+CPRE (City Prefix): An optional word placed in front of the city name, like "New Arburg" or "Fort Arburg". Most of these are usually set to an empty string "" so that only a few cities get prefixes.
+Leader Names
+Generated using LF + " " + LL.
+
+LF (Leader First Name): The actual given name of the leader (e.g., "Arak", "Freya").
+LL (Leader Last Name / Epithet): A title, descriptor, or surname attached to the end of the leader's name (e.g., "the Bold", "Stormborn", "Ironhand").
+Whenever you want to add a new culture, you can just create a new .json file in the onomastics folder filling out these arrays, and the game will automatically load it and assign it to new civilizations!
+

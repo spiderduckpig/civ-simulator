@@ -31,10 +31,6 @@ const civDetail    = document.getElementById("civ-detail");
 const eventLog     = document.getElementById("event-log");
 const settingsPanel = document.getElementById("settings-panel");
 const btnSettings  = document.getElementById("btn-settings");
-const btnDiplo     = document.getElementById("btn-diplo");
-const diploModal   = document.getElementById("diplo-modal");
-const diploBody    = document.getElementById("diplo-body");
-const diploClose   = document.getElementById("diplo-close");
 
 // ── Client state ──────────────────────────────────────────────────────────────
 let mapData    = null;
@@ -173,11 +169,6 @@ function updateUI() {
         renderCivDetail(civ, wars);
     }
 
-    // Live-refresh diplomacy modal if open
-    if (diploModal && diploModal.style.display === "block") {
-        renderDiploScreen();
-    }
-
     // Attach click handlers to civ rows
     document.querySelectorAll(".civ-row[data-id]").forEach(el => {
         el.addEventListener("click", () => {
@@ -235,15 +226,6 @@ function renderCivDetail(civ, wars) {
         .map(e => `<div class="detail-event">• ${e}</div>`)
         .join("");
 
-    const aggr = civ.aggressiveness ?? 0.5;
-    const aggrColor = aggr > 0.65 ? "#f85149" : aggr > 0.4 ? "#f0c040" : "#3fb950";
-    const intColor = civ.integrity > 0.6 ? "#3fb950" : "#f85149";
-    const allyNames = (civ.allies || [])
-        .map(aid => gameState.civs.find(c => c.id === aid))
-        .filter(Boolean)
-        .map(a => `<span style="color:${a.color}">${a.name}</span>`)
-        .join(", ");
-
     civDetail.innerHTML = `
         <div class="detail-header">
             <span class="dot" style="background:${civ.color}"></span>
@@ -252,134 +234,16 @@ function renderCivDetail(civ, wars) {
         </div>
         ${civ.parent_name ? `<div class="detail-sub">From ${civ.parent_name}</div>` : ""}
         <div class="detail-stats">
-            <div>👑 Leader: ${civ.leader}</div>
-            <div>👥 Pop: ${civ.population|0} · ⚔ Military: ${civ.military|0} · 📐 Land: ${civ.territory.length}</div>
-            <div>💰 Gold: ${civ.gold|0} · ₿ Wealth: <span style="color:#f0c040">${civ.wealth|0}</span> · 🍞 Food: ${civ.food|0}</div>
-            <div>🔬 Tech: ${civ.tech.toFixed(1)} · 🎭 Culture: ${civ.culture.toFixed(1)}</div>
-            <div>🛡 Integrity: <span style="color:${intColor}">${(civ.integrity*100)|0}%</span> · 💢 Aggressiveness: <span style="color:${aggrColor}">${(aggr*100)|0}%</span></div>
-            <div>⚡ Power: ${civ.power|0}</div>
-            <div>🌾 Farm: ${civ.farm_output|0} · ⛏ Ore/Metal: ${civ.ore_output|0}/${civ.metal_output|0} · 📦 Trade: ${civ.trade_output|0} · 🛤 Roads: ${civ.roads.length}</div>
-            ${allyNames ? `<div>🤝 Allies: ${allyNames}</div>` : ""}
+            <div>👑 ${civ.leader}</div>
+            <div>👥 ${civ.population|0} · ⚔ ${civ.military|0} · 📐 ${civ.territory.length}</div>
+            <div>💰 ${civ.gold|0} · ₿ <span style="color:#f0c040">${civ.wealth|0}</span> · 🍞 ${civ.food|0}</div>
+            <div>🔬 ${civ.tech.toFixed(1)} · 🎭 ${civ.culture.toFixed(1)}</div>
+            <div>🛡 <span style="color:${civ.integrity > 0.6 ? "#3fb950" : "#f85149"}">${(civ.integrity*100)|0}%</span> · ${civ.peacefulness > 0.5 ? "🕊" : "⚔"}${(civ.peacefulness*100)|0}%</div>
+            <div>🌾${civ.farm_output|0} ⛏${civ.ore_output|0}/${civ.metal_output|0} 📦${civ.trade_output|0} 🛤${civ.roads.length}</div>
         </div>
         ${cities ? `<div class="detail-section-label">CITIES (${civ.cities.length})</div>${cities}` : ""}
         ${myWars.length ? `<div class="detail-section-label war-label">⚔ WARS</div>${warInfo}` : warInfo}
         ${history ? `<div class="detail-section-label">HISTORY</div>${history}` : ""}
-    `;
-}
-
-// ── Diplomacy modal ───────────────────────────────────────────────────────────
-
-function relColor(r) {
-    // -1 (deep red) → 0 (neutral gray) → +1 (deep green)
-    if (r >= 0) {
-        const t = Math.min(1, r);
-        const g = (80 + t * 120) | 0;
-        return `rgb(40, ${g}, 40)`;
-    } else {
-        const t = Math.min(1, -r);
-        const rc = (80 + t * 130) | 0;
-        return `rgb(${rc}, 40, 40)`;
-    }
-}
-
-function renderDiploScreen() {
-    const alive = gameState.civs.filter(c => c.alive);
-    if (!alive.length) {
-        diploBody.innerHTML = `<div style="padding:20px;color:#8b949e">No nations yet.</div>`;
-        return;
-    }
-
-    const wars = gameState.wars || [];
-    const warKeyOf = (a, b) => {
-        const lo = Math.min(a, b), hi = Math.max(a, b);
-        return `${lo}|${hi}`;
-    };
-    const warMap = new Map();
-    for (const w of wars) warMap.set(warKeyOf(w.a_id, w.d_id), w);
-
-    // Matrix of relations (symmetric — use the row civ's stored value)
-    const headRow = `<tr><th class="row-head"></th>${alive.map(c =>
-        `<th style="color:${c.color}">${c.name}</th>`
-    ).join("")}</tr>`;
-
-    const rows = alive.map(a => {
-        const cells = alive.map(b => {
-            if (a.id === b.id) {
-                return `<td class="rel-cell rel-self">—</td>`;
-            }
-            const wkey = warKeyOf(a.id, b.id);
-            const atWar = warMap.has(wkey);
-            const allied = (a.allies || []).includes(b.id);
-            const rel = (a.relations && a.relations[String(b.id)]) ?? 0;
-            let marker = "";
-            if (atWar) marker = `<div style="color:#ff6b6b;font-weight:700">⚔</div>`;
-            else if (allied) marker = `<div style="color:#58a6ff">🤝</div>`;
-            const bg = relColor(rel);
-            return `<td class="rel-cell" style="background:${bg};color:#fff">
-                ${(rel * 100).toFixed(0)}${marker}
-            </td>`;
-        }).join("");
-        return `<tr><th class="row-head" style="color:${a.color}">${a.name}</th>${cells}</tr>`;
-    }).join("");
-
-    const matrix = `<table>${headRow}${rows}</table>`;
-
-    // Power ranking
-    const byPower = [...alive].sort((a, b) => (b.power || 0) - (a.power || 0));
-    const maxPow = Math.max(1, byPower[0].power || 0);
-    const powerList = byPower.map(c => {
-        const w = Math.max(4, ((c.power || 0) / maxPow * 140) | 0);
-        return `<div class="power-row">
-            <span class="dot" style="background:${c.color}"></span>
-            <span class="pname">${c.name}</span>
-            <span class="pbar" style="width:${w}px"><span style="width:100%;background:${c.color}"></span></span>
-            <span style="color:#8b949e">${(c.power||0)|0}</span>
-        </div>`;
-    }).join("");
-
-    // Active wars
-    const warCards = wars.length ? wars.map(w => {
-        const att = alive.find(c => c.id === w.a_id);
-        const dfn = alive.find(c => c.id === w.d_id);
-        if (!att || !dfn) return "";
-        const dur = gameState.tick - w.start_tick;
-        const confA = w.confidence_a ?? 0.5;
-        const confD = w.confidence_d ?? 0.5;
-        const exhA  = w.exhaustion_a ?? 0;
-        const exhD  = w.exhaustion_d ?? 0;
-        const moraleBar = (conf, exh, col) => {
-            const cWidth = Math.max(0, Math.min(100, conf * 100)) | 0;
-            const eWidth = Math.max(0, Math.min(100, exh  * 100)) | 0;
-            return `
-              <div class="morale-bar" title="Confidence ${(conf*100)|0}%"><span style="width:${cWidth}%;background:${col}"></span></div>
-              <div class="morale-bar" title="Exhaustion ${(exh*100)|0}%"><span style="width:${eWidth}%;background:#d73a49"></span></div>
-            `;
-        };
-        return `<div class="war-card">
-            <div class="war-head">
-                <span class="war-name" style="color:${att.color}">${att.name}</span>
-                <span class="war-role agg">Aggressor</span>
-                <span style="color:#8b949e">vs</span>
-                <span class="war-name" style="color:${dfn.color}">${dfn.name}</span>
-                <span class="war-role def">Defender</span>
-                <span style="color:#6e7681;font-size:9px">· ${dur}yr</span>
-            </div>
-            <div style="display:grid;grid-template-columns:90px 1fr;gap:2px 8px;font-size:9px;color:#8b949e">
-                <div>${att.name}</div>
-                <div>Conf ${(confA*100)|0}% · Exh ${(exhA*100)|0}% ${moraleBar(confA, exhA, att.color)}</div>
-                <div>${dfn.name}</div>
-                <div>Conf ${(confD*100)|0}% · Exh ${(exhD*100)|0}% ${moraleBar(confD, exhD, dfn.color)}</div>
-            </div>
-        </div>`;
-    }).join("") : `<div style="color:#3fb950">🕊 No active wars.</div>`;
-
-    diploBody.innerHTML = `
-        <div class="diplo-section">Relation Matrix <span style="font-weight:400;color:#6e7681;text-transform:none">(row's view of column · ⚔ war · 🤝 ally)</span></div>
-        ${matrix}
-        <div class="diplo-section">Active Wars</div>
-        <div class="war-list">${warCards}</div>
-        <div class="diplo-section">Power Ranking</div>
-        <div class="power-list">${powerList}</div>
     `;
 }
 
@@ -478,84 +342,34 @@ function showTooltip(x, y, info) {
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
         if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
-        lines.push(`<div>👥 Pop ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
+        lines.push(`<div>Pop: ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
         lines.push(`<div style="color:#8b949e">🍞 Food ${c.food} · 💰 Wealth ${c.wealth}</div>`);
         lines.push(`<div style="color:#8b949e">📦 Trade ${c.trade} (potential ${c.trade_potential}, roads +${c.road_trade})</div>`);
         if (s) {
             const imps = [];
-            if (s.farms)      imps.push(`🌾 ${s.farms} farms${s.avgFarmLvl > 1 ? ` (avg Lv.${s.avgFarmLvl})` : ""}`);
-            if (s.mines)      imps.push(`⛏ ${s.mines} mines${s.avgMineLvl > 1 ? ` (avg Lv.${s.avgMineLvl})` : ""}`);
-            if (s.lumber)     imps.push(`🌲 ${s.lumber} lumber`);
-            if (s.pastures)   imps.push(`🐄 ${s.pastures} pastures`);
-            if (s.quarries)   imps.push(`🪨 ${s.quarries} quarries`);
-            if (s.windmills)  imps.push(`🌀 ${s.windmills} windmills`);
-            if (s.ports)      imps.push(`⚓ ${s.ports} ports`);
-            if (s.fisheries)  imps.push(`🐟 ${s.fisheries} fisheries`);
-            if (s.smitheries) imps.push(`🔨 ${s.smitheries} smitheries`);
-            if (s.forts)      imps.push(`🛡 ${s.forts} forts`);
+            if (s.farms) imps.push(`${s.farms} farms${s.avgFarmLvl > 1 ? ` (avg Lv.${s.avgFarmLvl})` : ""}`);
+            if (s.mines) imps.push(`${s.mines} mines${s.avgMineLvl > 1 ? ` (avg Lv.${s.avgMineLvl})` : ""}`);
+            if (s.lumber) imps.push(`${s.lumber} lumber`);
+            if (s.pastures) imps.push(`${s.pastures} pastures`);
+            if (s.quarries) imps.push(`${s.quarries} quarries`);
+            if (s.windmills) imps.push(`${s.windmills} windmills`);
+            if (s.ports) imps.push(`${s.ports} ports`);
+            if (s.smitheries) imps.push(`${s.smitheries} smitheries`);
+            if (s.forts) imps.push(`${s.forts} forts`);
+            
+            const focusMap = {1: "Farming", 2: "Mining", 3: "Defense"};
+            const focusColor = {1: "#c8a000", 2: "#6a737d", 3: "#d73a49"};
+            const fValue = c.focus || 1;
+            
+            lines.push(`<div style="color:#8b949e">Focus: <span style="color:${focusColor[fValue]}">${focusMap[fValue]}</span></div>`);
+            lines.push(`<div style="color:#8b949e">⚙️  Ore: ${c.city_ore} · 🧱  Stone: ${c.city_stone} · 🛡️  Metal: ${c.city_metal}</div>`);
 
-            const focusMap   = {0: "Farming", 1: "Mining", 2: "Defense", 3: "Trade"};
-            const focusEmoji = {0: "🌾",       1: "⛏",     2: "🛡",      3: "📦"};
-            const focusColor = {0: "#c8a000", 1: "#6a737d", 2: "#d73a49", 3: "#3b8bd6"};
-            const fValue = c.focus | 0;
-
-            lines.push(`<div style="color:#8b949e">Focus: <span style="color:${focusColor[fValue]}">${focusEmoji[fValue]} ${focusMap[fValue]}</span></div>`);
-            lines.push(`<div style="color:#8b949e">⚙ Ore ${c.city_ore} · 🧱 Stone ${c.city_stone} · 🗡 Metal ${c.city_metal}</div>`);
-
-            lines.push(`<div style="color:#8b949e">📐 ${s.tileCount} tiles · 💎 ${s.resCount} resources</div>`);
+            lines.push(`<div style="color:#8b949e">${s.tileCount} tiles · ${s.resCount} resources</div>`);
             if (imps.length) {
+                // Break into multiple lines if too long
                 lines.push(`<div style="color:#8b949e">${imps.slice(0, 3).join(" · ")}</div>`);
-                if (imps.length > 3) lines.push(`<div style="color:#8b949e">${imps.slice(3, 6).join(" · ")}</div>`);
-                if (imps.length > 6) lines.push(`<div style="color:#8b949e">${imps.slice(6).join(" · ")}</div>`);
+                if (imps.length > 3) lines.push(`<div style="color:#8b949e">${imps.slice(3).join(" · ")}</div>`);
             }
-        }
-    }
-    // Stacked army tooltip(s) — one block per army on this cell
-    if (info.armies && info.armies.length) {
-        const behaviorLabel = {
-            defend_fort:      "🛡 Defending Fort",
-            defend_territory: "🗺 Defending Frontier",
-            attack_army:      "⚔ Hunting Army",
-            attack_city:      "🏰 Assaulting City",
-            relieve_city:     "🏳 Relieving City",
-            retreating:       "↩ Retreating",
-        };
-        const behaviorColor = {
-            defend_fort:      "#3fb950",
-            defend_territory: "#56b870",
-            attack_army:      "#f85149",
-            attack_city:      "#d73a49",
-            relieve_city:     "#58a6ff",
-            retreating:       "#8b949e",
-        };
-        for (const a of info.armies) {
-            const sFrac = a.max_strength > 0 ? a.strength / a.max_strength : 0;
-            const sColor = sFrac > 0.5 ? "#3fb950" : sFrac > 0.25 ? "#f0c040" : "#f85149";
-            const oColor = a.organization > 50 ? "#58a6ff" : a.organization > 25 ? "#f0c040" : "#f85149";
-            const supColor = a.supply > 50 ? "#3fb950" : a.supply > 20 ? "#f0c040" : "#f85149";
-            const bLabel = behaviorLabel[a.behavior] || a.behavior;
-            const bColor = behaviorColor[a.behavior] || "#8b949e";
-
-            const fort = a.fortification || 0;
-            const fortPct = (fort * 100) | 0;
-            const fortColor = fort > 0.4 ? "#f0c040" : fort > 0.15 ? "#e0b020" : fort > 0.05 ? "#a68a30" : "#6a6a6a";
-
-            lines.push(`<div style="margin-top:6px;border-top:1px solid #30363d;padding-top:4px">`);
-            lines.push(`<div style="font-weight:600">⚔ ${a.commander}</div>`);
-            lines.push(`<div style="color:${a.owner_color};font-size:9px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
-            lines.push(`<div style="color:${bColor};font-size:10px">${bLabel}</div>`);
-            if (a.target_name) {
-                lines.push(`<div style="color:#8b949e;font-size:9px">→ ${a.target_name}</div>`);
-            }
-            lines.push(`<div style="color:#8b949e">💪 Strength: <span style="color:${sColor}">${a.strength.toFixed(0)}/${a.max_strength.toFixed(0)}</span></div>`);
-            lines.push(`<div style="color:#8b949e">🎯 Organization: <span style="color:${oColor}">${a.organization.toFixed(0)}%</span> · 🍖 Supply: <span style="color:${supColor}">${a.supply.toFixed(0)}%</span></div>`);
-            if (fortPct > 0) {
-                lines.push(`<div style="color:#8b949e">🏯 Fortification: <span style="color:${fortColor}">+${fortPct}%</span> <span style="font-size:9px">(${a.fort_source || "open field"})</span></div>`);
-            } else {
-                lines.push(`<div style="color:#8b949e;font-size:9px">🏯 Open field (no fortification)</div>`);
-            }
-            lines.push(`<div style="color:#8b949e;font-size:9px">⭐ Skill ×${a.skill.toFixed(2)}</div>`);
-            lines.push(`</div>`);
         }
     }
     tooltip.innerHTML = lines.filter(Boolean).join("");
@@ -602,14 +416,10 @@ selSpeed.addEventListener("change", () => {
     ws.send(JSON.stringify({ action: "speed", value: parseFloat(selSpeed.value) }));
 });
 
-const MAP_MODE_CYCLE = ["terrain", "political", "armies"];
-const MAP_MODE_LABEL = { terrain: "🌍 Ter", political: "🗺 Pol", armies: "⚔ Arm" };
-const MAP_MODE_BG    = { terrain: "#30363d", political: "#6c5ce7", armies: "#da3633" };
 btnMapMode.addEventListener("click", () => {
-    const idx = MAP_MODE_CYCLE.indexOf(mapMode);
-    mapMode = MAP_MODE_CYCLE[(idx + 1) % MAP_MODE_CYCLE.length];
-    btnMapMode.textContent = MAP_MODE_LABEL[mapMode];
-    btnMapMode.style.background = MAP_MODE_BG[mapMode];
+    mapMode = mapMode === "terrain" ? "political" : "terrain";
+    btnMapMode.textContent = mapMode === "political" ? "🗺 Pol" : "🌍 Ter";
+    btnMapMode.style.background = mapMode === "political" ? "#6c5ce7" : "#30363d";
     renderAll();
 });
 
@@ -619,25 +429,6 @@ chkLevels.addEventListener("change", renderAll);
 btnSettings.addEventListener("click", () => {
     settingsPanel.style.display = settingsPanel.style.display === "none" ? "flex" : "none";
     btnSettings.style.background = settingsPanel.style.display !== "none" ? "#58a6ff" : "#30363d";
-});
-
-btnDiplo.addEventListener("click", () => {
-    const showing = diploModal.style.display === "block";
-    diploModal.style.display = showing ? "none" : "block";
-    btnDiplo.style.background = !showing ? "#a371f7" : "";
-    if (!showing) renderDiploScreen();
-});
-
-diploClose.addEventListener("click", () => {
-    diploModal.style.display = "none";
-    btnDiplo.style.background = "";
-});
-
-diploModal.addEventListener("click", (e) => {
-    if (e.target === diploModal) {
-        diploModal.style.display = "none";
-        btnDiplo.style.background = "";
-    }
 });
 
 // Settings sliders

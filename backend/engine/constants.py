@@ -65,45 +65,127 @@ RESOURCE_ICONS = {
 
 
 class IMP:
-    NONE    = 0
-    FARM    = 1
-    MINE    = 2
-    LUMBER  = 3
-    QUARRY  = 4
-    PASTURE = 5
+    NONE     = 0
+    FARM     = 1
+    MINE     = 2  # Produces Ore
+    LUMBER   = 3
+    QUARRY   = 4  # Produces Stone
+    PASTURE  = 5
+    WINDMILL = 6
+    FORT     = 7
+    PORT     = 8
+    SMITHERY = 9
+    FISHERY  = 10  # Coastal food + modest trade
 
+# Bit-packed encoding: low 5 bits = type (0-31), remaining bits = level-1.
+# Use helpers in engine.improvements to pack/unpack — never touch bits directly.
+IMP_TYPE_BITS = 5
+IMP_TYPE_MASK = (1 << IMP_TYPE_BITS) - 1     # 0x1F
+IMP_LEVEL_STEP = 1 << IMP_TYPE_BITS          # 32
 
 IMP_COLORS = {
-    IMP.FARM:    "#c8a000",
-    IMP.MINE:    "#888888",
-    IMP.LUMBER:  "#44aa22",
-    IMP.QUARRY:  "#999999",
-    IMP.PASTURE: "#77bb55",
+    IMP.FARM:     "#c8a000",
+    IMP.MINE:     "#666666",
+    IMP.LUMBER:   "#44aa22",
+    IMP.QUARRY:   "#999999",
+    IMP.PASTURE:  "#77bb55",
+    IMP.WINDMILL: "#e8d088",
+    IMP.FORT:     "#444444",
+    IMP.PORT:     "#336699",
+    IMP.SMITHERY: "#b84422",
+    IMP.FISHERY:  "#4aaed8",
 }
 
 IMP_NAMES = {
-    IMP.NONE:    "—",
-    IMP.FARM:    "Farm",
-    IMP.MINE:    "Mine",
-    IMP.LUMBER:  "Lumber",
-    IMP.QUARRY:  "Quarry",
-    IMP.PASTURE: "Pasture",
+    IMP.NONE:     "—",
+    IMP.FARM:     "Farm",
+    IMP.MINE:     "Mine",
+    IMP.LUMBER:   "Lumber",
+    IMP.QUARRY:   "Quarry",
+    IMP.PASTURE:  "Pasture",
+    IMP.WINDMILL: "Windmill",
+    IMP.FORT:     "Fort",
+    IMP.PORT:     "Port",
+    IMP.SMITHERY: "Smithery",
+    IMP.FISHERY:  "Fishery",
+}
+
+# City focus — what the city prioritises. Biases its build queue and the
+# improvements it will accept on its tiles. The HMM transition logic lives
+# in city_dev.py.
+class FOCUS:
+    FARMING = 0
+    MINING  = 1
+    DEFENSE = 2
+    TRADE   = 3
+
+FOCUS_NAMES = {
+    FOCUS.FARMING: "Farming",
+    FOCUS.MINING:  "Mining",
+    FOCUS.DEFENSE: "Defense",
+    FOCUS.TRADE:   "Trade",
+}
+
+FOCUS_COLORS = {
+    FOCUS.FARMING: "#c8a000",
+    FOCUS.MINING:  "#6a737d",
+    FOCUS.DEFENSE: "#d73a49",
+    FOCUS.TRADE:   "#3b8bd6",
 }
 
 CAN_FARM = {T.PLAINS, T.GRASS, T.JUNGLE, T.SWAMP}
 RES_LIST = ["iron", "gold", "horses", "wheat", "fish", "gems", "wood", "stone", "spices", "ivory"]
 
-PRE    = ["Ar","Bal","Cor","Dra","El","Fal","Gor","Ha","Ith","Jar","Kel","Lor","Mar","Nor","Or","Par","Qar","Ren","Sol","Tar","Ul","Val","Wor","Xen","Yr","Zan","Ak","Bri","Cael","Dur","Esh","Fen","Gil","Hel","Iro","Jul","Kha","Lun","Myr","Niv","Osh","Pyr","Rha","Syr","Thal","Ur","Ves","Wyn","Xar","Yth","Zul"]
-MID_S  = ["an","eth","in","on","ul","ash","ith","or","en","al","os","ur","ak","em","id","ar","el","ok","un","is"]
-SUF_S  = ["ia","os","um","is","ar","en","oth","ax","ium","ica","esh","and","or","heim","gard","rok","ven","dale","mere","hold","stan","land","rea","nia","tia"]
-CPRE   = ["New ","Fort ","Port ","Saint ","North ","South ","East ","West ","Old ","Great ","","","","","","","","","",""]
-CSUF   = ["ton","burg","ville","haven","ford","field","gate","bridge","keep","watch","holm","stead","crest","fall","shore","wood","vale","moor","peak","port","bay","well","dale"]
-LF     = ["Arak","Belen","Cyra","Dorn","Eska","Fenn","Gael","Hira","Ivak","Jael","Kira","Lorn","Mira","Nael","Orik","Pala","Rath","Sela","Tarn","Ula","Vorn","Wyra","Xael","Yara","Zorn","Alys","Bram","Cassia","Theron","Lysa","Magnus","Freya"]
-LL     = ["the Bold","the Wise","Ironhand","Stormborn","Goldeneye","the Just","the Cruel","the Great","the Conqueror","Peacemaker","the Silent","Sunbringer","the Unyielding","the Cunning","the Mad","the Young"]
-
 CIV_PALETTE = ["#e74c3c","#3498db","#f39c12","#2ecc71","#9b59b6","#e67e22","#1abc9c","#c0392b","#2980b9","#27ae60","#8e44ad","#d35400","#16a085","#f1c40f","#e84393","#00b894","#6c5ce7","#fd79a8","#00cec9","#d63031","#0984e3","#00b4d8","#a29bfe","#636e72","#b2bec3"]
 
 MIN_CITY_DIST = 9
+
+# ── Army / fort / siege constants ────────────────────────────────────────────
+ARMY_BASE_STRENGTH    = 100.0
+# Strength multiplier by fort level (lvl 1..5 → index 0..4)
+ARMY_FORT_MULT        = [1.0, 1.5, 2.1, 2.8, 3.7]
+ARMY_MOVE_RANGE       = 2          # cells per tick (lenient)
+ARMY_SUPPLY_FREE_DIST = 6          # supply doesn't decay within this radius of origin
+ARMY_SUPPLY_DECAY     = 0.55       # per cell beyond free dist, per tick
+ARMY_SUPPLY_REPLEN    = 7.0        # replenish/tick when on a farm/pasture/fishery cell
+ARMY_COMBAT_RANGE     = 1          # adjacent
+ARMY_COMBAT_DAMAGE    = 0.07       # base damage coefficient (army vs army)
+ARMY_CITY_DAMAGE      = 0.05       # base damage coefficient (army vs city)
+ARMY_ENGAGE_RANGE     = 4          # range at which army "sees" enemy army for HMM
+ARMY_TARGET_CITY_RANGE = 35        # range at which army considers city as a target
+ARMY_RESPAWN_DELAY    = 25         # ticks before a fort can respawn a destroyed army
+ARMY_PATHFIND_BUDGET  = 400        # max BFS frontier cells per pathfind (cap cost)
+
+# Organisation thresholds (retreat / recovery). Scale-free fractions of 100.
+ARMY_BROKEN_ORG       = 5.0        # at/below: army is "broken", enters retreat
+ARMY_RECOVER_ORG      = 45.0       # above: retreating army resumes normal HMM
+ARMY_FRONT_DIST       = 10         # fort/army is "near the front" within this cells
+
+# Fortification bonuses (expressed as fractions — damage taken is divided
+# by (1 + fortification), so +0.5 means 33% less damage).
+FORT_BONUS_PER_LEVEL   = 0.18      # +18% fortification per fort level
+CITY_DEFENSE_BONUS     = 0.35      # flat bonus when sitting on a friendly city
+CAPITAL_DEFENSE_BONUS  = 0.25      # additional bonus on top of CITY_DEFENSE_BONUS for capitals
+FRIENDLY_TERRAIN_BONUS = 0.08      # small defensive edge anywhere inside own borders
+
+FORT_METAL_UPKEEP     = 0.45       # per fort level per tick
+CITY_BASE_HP          = 65.0
+CAPITAL_HP_BONUS      = 50.0
+FORT_HP_BONUS         = 25.0       # per level when a fort sits on the same cell
+CITY_HP_REGEN         = 0.6        # per tick when not under attack
+
+# ── City development (investment) ────────────────────────────────────────────
+# Upgrades are paid from a city's own wealth stockpile. Costs are scale-free:
+# they are expressed as a fraction of the city's current wealth, not as a
+# fixed number of gold. This keeps the investment loop sensible regardless
+# of how food/trade numbers are tuned later.
+INVEST_COST_BASE_FRAC   = 0.12   # baseline: a level-1 upgrade costs 12% of current city wealth
+INVEST_COST_LEVEL_POW   = 1.35   # cost scales by (level ** this) for higher tiers
+INVEST_MIN_WEALTH_FLOOR = 6.0    # absolute floor so cities can still upgrade in early game
+INVEST_MAX_PER_TICK     = 1      # at most this many upgrades per city per investment tick
+INVEST_PERIOD_TICKS     = 3      # how often a city attempts investment
+
+FOCUS_HMM_PERIOD        = 12     # how often a city reconsiders its focus
 
 DEFAULT_PARAMS = {
     "river_pref":  3.0,

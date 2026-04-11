@@ -1,0 +1,1242 @@
+import math
+import random
+from typing import List, Callable, Dict
+
+from .constants import (
+    W, H, N, T, IMP, CAN_FARM, FOCUS,
+    ARMY_BASE_STRENGTH, ARMY_FORT_MULT, ARMY_MOVE_RANGE,
+    ARMY_SUPPLY_FREE_DIST, ARMY_SUPPLY_DECAY, ARMY_SUPPLY_REPLEN,
+    ARMY_COMBAT_RANGE, ARMY_COMBAT_DAMAGE, ARMY_CITY_DAMAGE,
+    ARMY_ENGAGE_RANGE, ARMY_TARGET_CITY_RANGE, ARMY_RESPAWN_DELAY,
+    FORT_METAL_UPKEEP, CITY_BASE_HP, CAPITAL_HP_BONUS, FORT_HP_BONUS,
+    CITY_HP_REGEN,
+)
+from .helpers import (
+    neighbors, is_land, border_cells, dist,
+    war_key, find_regions, best_improvement, cell_on_river
+)
+from .mapgen import cell_coastal, cell_river_mouth
+from .civ import build_road, gen_city_name, gen_commander_name, next_army_id
+
+
+def _settle_score(cell, ter, rivers, res, all_city_cells, params):
+    """Score a cell as a potential city site. Returns (score, cell) or None if invalid."""
+    t = ter[cell]
+    if t in (T.MTN, T.SNOW, T.DESERT) or t <= T.COAST:
+        return None
+
+    score = 0.0
+
+    # ── Soft distance penalty (continuous, not a hard cutoff) ──────────
+    # Very close = massive debuff, fading with distance
+    if all_city_cells:
+        min_d = min(dist(cell, oc) for oc in all_city_cells)
+        if min_d <= 2:
+            score -= 500          # effectively impossible
+        elif min_d <= 4:
+            score -= 80 / min_d   # ~20-27 penalty
+        elif min_d <= 7:
+            score -= 30 / min_d   # ~4-6 penalty
+        # Beyond 7: no penalty, slight bonus for spread
+        score += min(min_d * 0.3, 5)
+
+    # ── Terrain / feature bonuses ─────────────────────────────────────
+    if cell_river_mouth(cell, ter, rivers):
+        score += 60
+    elif cell_on_river(cell, rivers):
+        score += params.get("river_pref", 10) * 1.5
+    if cell_coastal(cell, ter):
+        score += params.get("coast_pref", 5) * 1.5
+    if t in CAN_FARM or (cell_on_river(cell, rivers) and t not in (T.DEEP, T.OCEAN, T.COAST, T.MTN, T.SNOW, T.BEACH, T.TUNDRA, T.DESERT)):
+        score += 2
+    else:
+        for n in neighbors(cell):
+            if cell_on_river(n, rivers) and t not in (T.DEEP, T.OCEAN, T.COAST, T.MTN, T.SNOW, T.BEACH, T.TUNDRA, T.DESERT):
+                score += 2
+                break
+    if cell in res:
+        score += 3
+
+    return score
+
+
+def _eval_settle_candidate(civ, cell, ter, rivers, res, all_city_cells, params):
+    """Score cell and update civ's cached best settlement candidate."""
+    sc = _settle_score(cell, ter, rivers, res, all_city_cells, params)
+    if sc is not None and sc > civ.get("_settle_score", float("-inf")):
+        civ["_settle_candidate"] = cell
+        civ["_settle_score"] = sc
+
+
+def _settle_peace(war, a, b, om, civs, tick, add_event):
+    """Restore pre-war borders. Captured cities transfer with their
+    pre-war Voronoi territory — everything else reverts to pre-war owner."""
+    att_id, def_id = war["a_id"], war["d_id"]
+    att = next((c for c in civs if c["id"] == att_id), None)
+    defn = next((c for c in civs if c["id"] == def_id), None)
+    if not att or not defn:
+        return
+
+    pre_a = war.get("pre_ter_a", set())
+    pre_d = war.get("pre_ter_d", set())
+    cap_by_a = set(war.get("captured_cities_a", []))  # city cells att captured from def
+    cap_by_d = set(war.get("captured_cities_d", []))  # city cells def captured from att
+
+    # Snapshot all cities on both sides (including captured ones)
+    att_city_cells = [ci["cell"] for ci in att["cities"]]
+    def_city_cells = [ci["cell"] for ci in defn["cities"]]
+
+    # For each pre-war tile, assign it to the nearest city that existed pre-war
+    # on its original side. Captured cities pull their Voronoi region with them.
+    # Pre-war defender tiles: assign to nearest city (defender's surviving + att's captured)
+    perm_to_att = set()
+    for t in pre_d:
+        # Find nearest captured-by-att city vs nearest surviving defender city
+        best_cap_d = min((dist(t, cc) for cc in cap_by_a), default=float("inf"))
+        best_def_d = min((dist(t, dc) for dc in def_city_cells), default=float("inf"))
+        if cap_by_a and best_cap_d < best_def_d:
+            perm_to_att.add(t)
+
+    perm_to_def = set()
+    for t in pre_a:
+        best_cap_d = min((dist(t, cc) for cc in cap_by_d), default=float("inf"))
+        best_att_d = min((dist(t, ac) for ac in att_city_cells), default=float("inf"))
+        if cap_by_d and best_cap_d < best_att_d:
+            perm_to_def.add(t)
+
+    # Apply: all cells currently held by either side revert to pre-war owner,
+    # except tiles that belong to captured city Voronoi regions
+    disputed = (att["territory"] | defn["territory"]) & (pre_a | pre_d)
+
+    for cell in list(disputed):
+        if cell in perm_to_att:
+            defn["territory"].discard(cell)
+            att["territory"].add(cell)
+            om[cell] = att_id
+        elif cell in perm_to_def:
+            att["territory"].discard(cell)
+            defn["territory"].add(cell)
+            om[cell] = def_id
+        elif cell in pre_a:
+            defn["territory"].discard(cell)
+            att["territory"].add(cell)
+            om[cell] = att_id
+        elif cell in pre_d:
+            att["territory"].discard(cell)
+            defn["territory"].add(cell)
+            om[cell] = def_id
+
+    # Prune cities that ended up outside their owner's territory
+    att["cities"] = [c for c in att["cities"] if c["cell"] in att["territory"]]
+    defn["cities"] = [c for c in defn["cities"] if c["cell"] in defn["territory"]]
+
+    # Disband all armies — peace treaty sends them home
+    war["armies_a"] = []
+    war["armies_d"] = []
+
+    add_event(f"🕊 Year {tick}: {a['name']} & {b['name']} made peace")
+    a["events"].append(f"Year {a['age']}: Peace with {b['name']}")
+    b["events"].append(f"Year {b['age']}: Peace with {a['name']}")
+
+
+# ── Army subsystem ─────────────────────────────────────────────────────────────
+
+def _city_max_hp(city: dict, impr: list) -> float:
+    """Compute max HP for a city based on capital status and any fort on its tile."""
+    base = CITY_BASE_HP
+    if city.get("is_capital"):
+        base += CAPITAL_HP_BONUS
+    raw = impr[city["cell"]] if 0 <= city["cell"] < N else 0
+    if raw and raw % 10 == IMP.FORT:
+        base += FORT_HP_BONUS * (raw // 10 + 1)
+    return base
+
+
+def _ensure_city_hp(city: dict, impr: list) -> None:
+    """Lazy-init HP fields for cities created before the army subsystem was wired in."""
+    if "max_hp" not in city or city["max_hp"] <= 0:
+        city["max_hp"] = _city_max_hp(city, impr)
+    if "hp" not in city:
+        city["hp"] = city["max_hp"]
+    if "last_dmg_tick" not in city:
+        city["last_dmg_tick"] = -999
+
+
+def _make_army(civ: dict, origin_cell: int, fort_level: int, war_id: str) -> dict:
+    mult = ARMY_FORT_MULT[min(max(fort_level - 1, 0), len(ARMY_FORT_MULT) - 1)]
+    max_str = ARMY_BASE_STRENGTH * mult
+    return {
+        "id":           next_army_id(),
+        "civ_id":       civ["id"],
+        "war_key":      war_id,
+        "cell":         origin_cell,
+        "origin_cell":  origin_cell,
+        "fort_level":   fort_level,
+        "max_strength": max_str,
+        "strength":     max_str,
+        "organization": 100.0,
+        "supply":       100.0,
+        "commander": {
+            "name":  gen_commander_name(civ["onom"]),
+            "skill": round(0.75 + random.random() * 0.55, 2),  # 0.75–1.30
+        },
+        "behavior":  "defending",
+        "objective": {"type": "defend", "target_cell": origin_cell, "target_id": None},
+    }
+
+
+def _spawn_war_armies(civ: dict, war: dict, side: str, impr: list, war_id: str) -> None:
+    """Populate war[armies_<side>] with one army per fort in the civ's territory.
+    Falls back to a single capital-spawned army if no forts exist."""
+    forts: list = []
+    for cell in civ["territory"]:
+        raw = impr[cell] if 0 <= cell < N else 0
+        if raw % 10 == IMP.FORT:
+            lvl = raw // 10 + 1
+            forts.append((cell, lvl))
+
+    armies: list = []
+    if forts:
+        for cell, lvl in forts:
+            armies.append(_make_army(civ, cell, lvl, war_id))
+    else:
+        cap = civ.get("capital", next(iter(civ["territory"]), -1))
+        if cap >= 0:
+            armies.append(_make_army(civ, cap, 1, war_id))
+
+    war["armies_a" if side == "a" else "armies_d"] = armies
+
+
+def _eff_strength(army: dict) -> float:
+    """Effective combat strength = raw strength * organization * commander * supply."""
+    org   = army["organization"] / 100.0
+    cmd   = army["commander"]["skill"]
+    sup   = 0.55 + 0.45 * min(1.0, army["supply"] / 50.0)  # below 50 supply hurts
+    return army["strength"] * org * cmd * sup
+
+
+def _select_behavior(army: dict, civ: dict, enemy: dict, enemy_armies: list) -> tuple:
+    """HMM-like behavior selector. Returns (behavior, objective_dict).
+    States: 'defending', 'attack_army', 'attack_city'."""
+    cur = army["cell"]
+    cur_b = army["behavior"]
+
+    # Closest enemy army (live ones only)
+    best_a = None
+    best_a_d = float("inf")
+    for ea in enemy_armies:
+        if ea["civ_id"] != enemy["id"] or ea["strength"] <= 0:
+            continue
+        d = dist(cur, ea["cell"])
+        if d < best_a_d:
+            best_a_d = d
+            best_a = ea
+
+    # Closest enemy city
+    best_c = None
+    best_c_d = float("inf")
+    for city in enemy["cities"]:
+        d = dist(cur, city["cell"])
+        if d < best_c_d:
+            best_c_d = d
+            best_c = city
+
+    # Forced retreat to defend if too weak
+    weak = army["supply"] < 18 or army["organization"] < 30 or army["strength"] < army["max_strength"] * 0.25
+    if weak:
+        return "defending", {
+            "type": "defend",
+            "target_cell": army["origin_cell"],
+            "target_id": None,
+        }
+
+    # Score behaviors
+    scores = {"defending": 0.6, "attack_army": 0.0, "attack_city": 0.0}
+
+    if best_a is not None and best_a_d <= ARMY_ENGAGE_RANGE * 4:
+        # Closer enemy army → higher score; favored if we outnumber them
+        my_eff    = _eff_strength(army)
+        their_eff = _eff_strength(best_a) if best_a["strength"] > 0 else 0.001
+        ratio = my_eff / max(their_eff, 0.1)
+        scores["attack_army"] = (4.0 / (1 + best_a_d * 0.12)) * (0.6 + 0.7 * min(2.5, ratio))
+
+    if best_c is not None and best_c_d <= ARMY_TARGET_CITY_RANGE:
+        scores["attack_city"] = 3.2 / (1 + best_c_d * 0.08)
+        if best_c.get("hp", 100) < best_c.get("max_hp", 100) * 0.6:
+            scores["attack_city"] *= 1.7
+        # Cities matter more if they're undefended (no enemy army within 5 cells)
+        any_def = any(
+            ea["civ_id"] == enemy["id"] and ea["strength"] > 0 and dist(ea["cell"], best_c["cell"]) <= 5
+            for ea in enemy_armies
+        )
+        if not any_def:
+            scores["attack_city"] *= 1.5
+
+    # Inertia bonus for current state
+    scores[cur_b] = scores.get(cur_b, 0) * 1.6 + 0.4
+
+    total = sum(scores.values())
+    if total <= 0:
+        return "defending", {
+            "type": "defend",
+            "target_cell": army["origin_cell"],
+            "target_id": None,
+        }
+
+    chosen = max(scores, key=lambda k: scores[k] * (0.8 + random.random() * 0.4))
+
+    if chosen == "attack_army" and best_a is not None:
+        return chosen, {
+            "type": "army",
+            "target_cell": best_a["cell"],
+            "target_id": best_a["id"],
+        }
+    if chosen == "attack_city" and best_c is not None:
+        return chosen, {
+            "type": "city",
+            "target_cell": best_c["cell"],
+            "target_id": None,
+        }
+    return "defending", {
+        "type": "defend",
+        "target_cell": army["origin_cell"],
+        "target_id": None,
+    }
+
+
+def _step_army_toward(army: dict, target: int, ter: list, om: list) -> None:
+    """Move the army up to ARMY_MOVE_RANGE cells along a greedy path toward `target`.
+    Avoids water, mountains, snow."""
+    for _ in range(ARMY_MOVE_RANGE):
+        cur = army["cell"]
+        if cur == target:
+            return
+        cur_d = dist(cur, target)
+        best = None
+        best_d = cur_d
+        # Allow lateral moves so we don't permanently freeze on local minima
+        equal_choices = []
+        for n in neighbors(cur):
+            if not (0 <= n < N):
+                continue
+            t = ter[n]
+            if t <= T.COAST or t == T.MTN or t == T.SNOW:
+                continue
+            d = dist(n, target)
+            if d < best_d:
+                best_d = d
+                best = n
+                equal_choices = [n]
+            elif d == best_d and d <= cur_d:
+                equal_choices.append(n)
+        if best is None:
+            # try a sideways step (random) to wiggle around an obstacle
+            if equal_choices:
+                army["cell"] = random.choice(equal_choices)
+            return
+        army["cell"] = best
+
+
+def _update_supply(army: dict, impr: list, om: list) -> None:
+    """Decay/replenish supply, recover organization in friendly territory."""
+    cur = army["cell"]
+    d = dist(cur, army["origin_cell"])
+    decay = max(0.0, (d - ARMY_SUPPLY_FREE_DIST) * ARMY_SUPPLY_DECAY)
+
+    raw = impr[cur] if 0 <= cur < N else 0
+    imp_type = raw % 10
+    if imp_type in (IMP.FARM, IMP.PASTURE):
+        army["supply"] = min(100.0, army["supply"] + ARMY_SUPPLY_REPLEN)
+
+    army["supply"] = max(0.0, army["supply"] - decay)
+
+    if army["supply"] <= 0.5:
+        army["organization"] = max(0.0, army["organization"] - 1.5)
+        army["strength"]     = max(0.0, army["strength"] - 0.6)
+
+    # Recover organization slowly when in own territory + decent supply
+    if 0 <= cur < N and om[cur] == army["civ_id"] and army["supply"] > 35:
+        army["organization"] = min(100.0, army["organization"] + 0.7)
+
+
+def _resolve_army_combat(armies_a: list, armies_b: list, civ_a: dict, civ_b: dict, tick: int, add_event) -> None:
+    """Mutual damage between adjacent enemy armies."""
+    for a in armies_a:
+        if a["strength"] <= 0:
+            continue
+        for b in armies_b:
+            if b["strength"] <= 0:
+                continue
+            if dist(a["cell"], b["cell"]) > ARMY_COMBAT_RANGE:
+                continue
+            ea = _eff_strength(a)
+            eb = _eff_strength(b)
+            jitter_a = 0.75 + random.random() * 0.5
+            jitter_b = 0.75 + random.random() * 0.5
+            a_dmg = eb * ARMY_COMBAT_DAMAGE * jitter_a
+            b_dmg = ea * ARMY_COMBAT_DAMAGE * jitter_b
+            a["strength"]     = max(0.0, a["strength"] - a_dmg)
+            b["strength"]     = max(0.0, b["strength"] - b_dmg)
+            a["organization"] = max(0.0, a["organization"] - 4.0 - random.random() * 3)
+            b["organization"] = max(0.0, b["organization"] - 4.0 - random.random() * 3)
+            if a["strength"] <= 0:
+                add_event(f"💀 Year {tick}: {civ_a['name']}'s {a['commander']['name']} fell in battle vs {civ_b['name']}")
+            if b["strength"] <= 0:
+                add_event(f"💀 Year {tick}: {civ_b['name']}'s {b['commander']['name']} fell in battle vs {civ_a['name']}")
+
+
+def _resolve_city_assault(armies: list, attacker: dict, defender: dict,
+                          om: list, impr: list, war: dict, war_side: str,
+                          tick: int, add_event) -> None:
+    """For each army adjacent to/on an enemy city, deal HP damage; capture if hp <= 0."""
+    for a in armies:
+        if a["strength"] <= 0:
+            continue
+        for city in list(defender["cities"]):
+            if dist(a["cell"], city["cell"]) > 1:
+                continue
+            _ensure_city_hp(city, impr)
+            ea = _eff_strength(a)
+            dmg = ea * ARMY_CITY_DAMAGE * (0.7 + random.random() * 0.6)
+            city["hp"] -= dmg
+            city["last_dmg_tick"] = tick
+            a["organization"] = max(0.0, a["organization"] - 1.4)
+            if city["hp"] > 0:
+                continue
+
+            # ── City captured ───────────────────────────────────────────
+            defender["cities"] = [c for c in defender["cities"] if c["cell"] != city["cell"]]
+            defender["territory"].discard(city["cell"])
+            attacker["territory"].add(city["cell"])
+            om[city["cell"]] = attacker["id"]
+            city["is_capital"] = False
+            city["max_hp"] = _city_max_hp(city, impr)
+            city["hp"] = city["max_hp"] * 0.5
+            attacker["cities"].append(city)
+            add_event(f"🔥 Year {tick}: {attacker['name']} stormed {city['name']}!")
+
+            cap_key = "captured_cities_a" if war_side == "a" else "captured_cities_d"
+            war.setdefault(cap_key, []).append(city["cell"])
+
+            # Capturing a city replenishes the storming army
+            a["organization"] = min(100.0, a["organization"] + 18)
+            a["supply"]       = min(100.0, a["supply"] + 25)
+
+
+def _tick_armies(civs: list, wars: dict, ter: list, impr: list, om: list,
+                 tick: int, add_event) -> None:
+    """Per-tick army update: behavior selection → movement → supply → combat."""
+    civ_by_id = {c["id"]: c for c in civs}
+
+    # ── Phase 1: behavior + movement ─────────────────────────────────────────
+    for wk, war in wars.items():
+        att = civ_by_id.get(war["a_id"])
+        defn = civ_by_id.get(war["d_id"])
+        if not att or not defn or not att["alive"] or not defn["alive"]:
+            continue
+
+        for side, civ, enemy, enemy_key in (
+            ("a", att, defn, "armies_d"),
+            ("d", defn, att, "armies_a"),
+        ):
+            armies = war.get("armies_a" if side == "a" else "armies_d", [])
+            enemy_armies = war.get(enemy_key, [])
+            for a in armies:
+                if a["strength"] <= 0:
+                    continue
+                _update_supply(a, impr, om)
+                # Re-evaluate behavior every tick (HMM with strong inertia)
+                behavior, obj = _select_behavior(a, civ, enemy, enemy_armies)
+                a["behavior"]  = behavior
+                a["objective"] = obj
+                if obj is not None:
+                    _step_army_toward(a, obj["target_cell"], ter, om)
+
+    # ── Phase 2: combat resolution (army vs army, then army vs city) ─────────
+    for wk, war in wars.items():
+        att = civ_by_id.get(war["a_id"])
+        defn = civ_by_id.get(war["d_id"])
+        if not att or not defn or not att["alive"] or not defn["alive"]:
+            continue
+        a_list = war.get("armies_a", [])
+        d_list = war.get("armies_d", [])
+
+        _resolve_army_combat(a_list, d_list, att, defn, tick, add_event)
+        _resolve_city_assault(a_list, att, defn, om, impr, war, "a", tick, add_event)
+        _resolve_city_assault(d_list, defn, att, om, impr, war, "d", tick, add_event)
+
+        # Strip destroyed armies
+        war["armies_a"] = [a for a in a_list if a["strength"] > 0]
+        war["armies_d"] = [d for d in d_list if d["strength"] > 0]
+
+    # ── Phase 3: fort respawning ─────────────────────────────────────────────
+    # Each fort can spawn a fresh army periodically while its civ is at war,
+    # so long as no friendly army is currently sitting on the fort cell.
+    for wk, war in wars.items():
+        att = civ_by_id.get(war["a_id"])
+        defn = civ_by_id.get(war["d_id"])
+        if not att or not defn:
+            continue
+        for civ, side in ((att, "a"), (defn, "d")):
+            armies_key = "armies_a" if side == "a" else "armies_d"
+            armies = war.get(armies_key, [])
+            occupied_origins = {a["origin_cell"] for a in armies if a["strength"] > 0}
+            cooldowns = civ.setdefault("fort_cooldowns", {})
+
+            for cell in list(civ["territory"]):
+                raw = impr[cell] if 0 <= cell < N else 0
+                if raw % 10 != IMP.FORT:
+                    continue
+                if cell in occupied_origins:
+                    continue
+                if tick < cooldowns.get(cell, 0):
+                    continue
+                # Need some metal to support a respawn
+                if civ.get("metal_stock", 0) < 4:
+                    continue
+                lvl = raw // 10 + 1
+                a = _make_army(civ, cell, lvl, wk)
+                armies.append(a)
+                civ["metal_stock"] -= 4
+                cooldowns[cell] = tick + ARMY_RESPAWN_DELAY
+            war[armies_key] = armies
+
+
+def tick_sim(
+    civs:   List[dict],
+    ter:    list,
+    res:    dict,
+    om:     list,       # ownership map: cell -> civ_id (0 = unclaimed)
+    wars:   dict,       # war_key -> {a_id, d_id, start_tick}
+    rivers: dict,
+    impr:   list,
+    tick:   int,
+    add_event: Callable[[str], None],
+    params: dict,
+) -> List[dict]:
+    """Run one simulation step. Returns any newly-spawned civs (from fragmentation)."""
+
+    alive = [c for c in civs if c["alive"]]
+
+    # ── Diplomacy ─────────────────────────────────────────────────────────────
+    for i in range(len(alive)):
+        for j in range(i + 1, len(alive)):
+            a, b = alive[i], alive[j]
+            k = war_key(a["id"], b["id"])
+            at_war = k in wars
+
+            # Check shared border
+            border = False
+            for bc in border_cells(a["territory"]):
+                if bc in b["territory"]:
+                    border = True
+                    break
+
+            if not at_war and border:
+                agg = (1 - a["peacefulness"] + 1 - b["peacefulness"]) / 2
+                size_bonus = 0.004 if len(a["territory"]) > len(b["territory"]) * 2 else 0
+                if random.random() < agg * 0.006 + size_bonus:
+                    att = a if a["military"] > b["military"] else b
+                    defn = b if att is a else a
+                    new_war = {
+                        "a_id": att["id"], "d_id": defn["id"], "start_tick": tick,
+                        # Snapshot borders at war start for restoration on peace
+                        "pre_ter_a": set(att["territory"]),
+                        "pre_ter_d": set(defn["territory"]),
+                        "captured_cities_a": [],  # city cells captured by attacker
+                        "captured_cities_d": [],  # city cells captured by defender
+                        "armies_a": [],
+                        "armies_d": [],
+                    }
+                    wars[k] = new_war
+                    add_event(f"⚔ Year {tick}: {att['name']} declared WAR on {defn['name']}!")
+                    att["events"].append(f"Year {att['age']}: War on {defn['name']}")
+                    defn["events"].append(f"Year {defn['age']}: {att['name']} attacked")
+
+                    # Build a fort when war starts if civ has gold AND has none yet
+                    for war_civ in (att, defn):
+                        has_fort = any(
+                            impr[c] % 10 == IMP.FORT for c in war_civ["territory"]
+                            if 0 <= c < N
+                        )
+                        if not has_fort and war_civ["gold"] > 30 and war_civ["territory"]:
+                            cells = list(war_civ["territory"])
+                            random.shuffle(cells)
+                            for c in cells:
+                                if impr[c] == IMP.NONE:
+                                    impr[c] = IMP.FORT
+                                    war_civ["gold"] -= 30
+                                    war_civ["events"].append(f"Year {war_civ['age']}: Constructed a Fort")
+                                    break
+
+                    # Spawn armies from each side's forts (or capital fallback)
+                    _spawn_war_armies(att,  new_war, "a", impr, k)
+                    _spawn_war_armies(defn, new_war, "d", impr, k)
+
+            if at_war:
+                war = wars[k]
+                dur = tick - war["start_tick"]
+                low_mil = a["military"] < 15 or b["military"] < 15
+                peace_chance = (
+                    (0.012 + (dur - 20) * 0.002 if dur > 20 else 0)
+                    + (0.04 if low_mil else 0)
+                    + (a["peacefulness"] + b["peacefulness"]) * 0.003
+                )
+                if random.random() < peace_chance:
+                    # Restore pre-war borders, except territory belonging to captured cities
+                    _settle_peace(war, a, b, om, civs, tick, add_event)
+                    del wars[k]
+
+    # ── Per-civ tick ───────────────────────────────────────────────────────────
+    for civ in alive:
+        civ["age"] += 1
+        ore_out = stone_out = metal_out = trade_out = raw_gold = 0.0
+
+        # ── Assign tiles to nearest city & compute per-city food ──────────
+        # Each city gets: its own cell + all territory cells closest to it
+        city_cells = {}   # city_cell -> list of territory cells
+        for city in civ["cities"]:
+            city_cells[city["cell"]] = []
+
+        if civ["cities"]:
+            for cell in civ["territory"]:
+                best_city = None
+                best_d = float("inf")
+                for city in civ["cities"]:
+                    d = dist(cell, city["cell"])
+                    if d < best_d:
+                        best_d = d
+                        best_city = city["cell"]
+                if best_city is not None:
+                    city_cells[best_city].append(cell)
+
+        # Compute per-city production and carrying capacity
+        farm_out = 0.0
+        civ_ore, civ_stone, civ_metal = 0.0, 0.0, 0.0
+        
+        for city in civ["cities"]:
+            city_food = 0.0
+            city_ore = 0.0
+            city_stone = 0.0
+            city_gold = 0.0
+            smithery_cap = 0.0
+            port_bonus = 0.0
+            
+            city["near_river"] = cell_on_river(city["cell"], rivers)
+            city["coastal"]    = cell_coastal(city["cell"], ter)
+
+            assigned = city_cells.get(city["cell"], [])
+            city["tiles"] = assigned
+            city["farm_tiles"] = []
+
+            for cell in assigned:
+                imp_raw = impr[cell]
+                imp = imp_raw % 10       # type
+                lvl = imp_raw // 10 + 1  # level (1-based)
+                on_river = cell_on_river(cell, rivers)
+                riv = 2.0 if on_river else 1.0
+                coast_mult = 1.5 if cell_coastal(cell, ter) else 1.0
+                r = res.get(cell)
+
+                if imp == IMP.FARM:
+                    food_val = (1.5 + lvl * 1.0) * riv * coast_mult
+                    # Windmill neighbor bonus
+                    windmill_multiplier = 1.0
+                    for n in neighbors(cell):
+                        if 0 <= n < N:
+                            n_imp_raw = impr[n]
+                            n_imp = n_imp_raw % 10
+                            n_lvl = n_imp_raw // 10 + 1
+                            if n_imp == IMP.WINDMILL:
+                                windmill_multiplier += n_lvl * 0.5
+                    city_food += food_val * windmill_multiplier
+                    city["farm_tiles"].append(cell)
+                elif imp == IMP.WINDMILL:
+                    city["farm_tiles"].append(cell) # let UI render it
+                elif imp == IMP.MINE:
+                    if r == "stone":
+                        city_stone += (0.5 + lvl * 0.5)
+                        city_gold += (0.2 + lvl * 0.3)
+                    elif r == "iron":
+                        city_ore += (1.0 + lvl * 0.5)
+                        city_gold += 1.5
+                    elif r in ("gold", "gems"):
+                        city_gold += 3.0 + lvl * 1.0
+                    else:
+                        # base mountain is split between ore and stone
+                        city_ore += (0.5 + lvl * 0.25)
+                        city_stone += (0.2 + lvl * 0.25)
+                        city_gold += 0.5
+                    city["farm_tiles"].append(cell)
+                elif imp == IMP.LUMBER:
+                    city_gold += 0.3
+                elif imp == IMP.PASTURE:
+                    city_food += 1.5 * riv
+                    city["farm_tiles"].append(cell)
+                elif imp == IMP.PORT:
+                    port_bonus += lvl * 2.0
+                    city["farm_tiles"].append(cell)
+                elif imp == IMP.SMITHERY:
+                    smithery_cap += lvl * 2.0
+                    city["farm_tiles"].append(cell)
+                elif imp == IMP.FORT:
+                    city["farm_tiles"].append(cell)
+
+                t = ter[cell]
+                if t in (T.PLAINS, T.GRASS):
+                    city_food += 0.4 * riv * 0.5
+
+                r = res.get(cell)
+                if r == "wheat":    city_food += 2.0 * riv
+                elif r == "fish":   city_food += 1.5 * coast_mult
+                elif r == "gold":   city_gold += 2.0
+                elif r == "gems":   city_gold += 1.5
+                elif r == "iron":   city_ore += 1.0
+                elif r == "stone":  city_stone += 1.0
+                elif r:             city_gold += 0.5
+            
+            # Refine ore to metal
+            city_metal = min(city_ore, smithery_cap)
+            city_ore -= city_metal
+            
+            city["city_ore"] = city_ore
+            city["city_stone"] = city_stone
+            city["city_metal"] = city_metal
+
+            # River/coast/river-mouth bonuses on the city itself
+            city_riv_b   = 1.5 if city["near_river"] else 1.0
+            city_coast_b = 1.3 if city["coastal"]    else 1.0
+            is_mouth = cell_river_mouth(city["cell"], ter, rivers)
+            city["river_mouth"] = is_mouth
+            mouth_b = 2.0 if is_mouth else 1.0
+            city_food *= city_riv_b * city_coast_b
+
+            # Carrying capacity: base 50 + food production scaled up
+            city["food_production"] = round(city_food, 1)
+            city["carrying_cap"]    = max(50, 50 + city_food * 18)
+
+            # Focus HMM transitions (Farming <-> Mining <-> Defense)
+            if tick % 10 == 0:
+                f = city.get("focus", FOCUS.FARMING)
+                civ_is_at_war = any(w["a_id"] == civ["id"] or w["d_id"] == civ["id"] for w in wars.values())
+                # Compute base emission probabilities for the current state given evidence (food, ore, war)
+                # For simplicity we simulate an HMM by treating the city's resources as emissions
+                # and adjusting the transition matrix based on them.
+                trans = {
+                    FOCUS.FARMING: [(FOCUS.MINING, 0.15 if city_stone + city_ore > 2 else 0.02),
+                                    (FOCUS.DEFENSE, 0.4 if civ_is_at_war else 0.01)],
+                    FOCUS.MINING:  [(FOCUS.FARMING, 0.3 if city_food < city["population"] * 0.3 else 0.05),
+                                    (FOCUS.DEFENSE, 0.4 if civ_is_at_war else 0.01)],
+                    FOCUS.DEFENSE: [(FOCUS.FARMING, 0.3 if not civ_is_at_war else 0.02),
+                                    (FOCUS.MINING, 0.2 if city_ore > 2 and not civ_is_at_war else 0.02)]
+                }
+                
+                transitions = trans.get(f, [])
+                total_prob = sum(p for tgt, p in transitions)
+                if total_prob > 0 and random.random() < total_prob:
+                    r = random.random() * total_prob
+                    curr = 0
+                    for tgt, p in transitions:
+                        curr += p
+                        if r <= curr:
+                            city["focus"] = tgt
+                            break
+
+            # Trade potential: population + nearby valuable resources
+            trade_res_bonus = 0.0
+            for cell in assigned:
+                r = res.get(cell)
+                if r in ("gold", "gems"):       trade_res_bonus += 8.0
+                elif r in ("spices", "ivory"):   trade_res_bonus += 6.0
+                elif r in ("iron", "stone"):     trade_res_bonus += 3.0
+                elif r in ("horses",):           trade_res_bonus += 2.0
+            city["trade_potential"] = (
+                city["population"] * 0.15 + trade_res_bonus + 4
+            ) * city_riv_b * city_coast_b * mouth_b + port_bonus
+
+            farm_out  += city_food
+            ore_out   += city_ore
+            stone_out += city_stone
+            metal_out += city_metal
+            raw_gold  += city_gold
+
+        # ── Road trade: connected cities share trade potential ────────
+        # Build road graph: city_cell -> [(other_city_cell, road_distance)]
+        road_graph: dict = {}
+        city_set = {c["cell"] for c in civ["cities"]}
+        for r in civ["roads"]:
+            a, b = r["from"], r["to"]
+            rd = len(r["path"])
+            # Direct connection
+            if a in city_set and b in city_set:
+                road_graph.setdefault(a, []).append((b, rd))
+                road_graph.setdefault(b, []).append((a, rd))
+            # Also check if intermediate cities lie on the path
+            for pc in r["path"]:
+                if pc in city_set and pc != a and pc != b:
+                    # Split into two segments
+                    idx = r["path"].index(pc)
+                    if a in city_set:
+                        road_graph.setdefault(a, []).append((pc, idx + 1))
+                        road_graph.setdefault(pc, []).append((a, idx + 1))
+                    if b in city_set:
+                        d2 = rd - idx
+                        road_graph.setdefault(b, []).append((pc, d2))
+                        road_graph.setdefault(pc, []).append((b, d2))
+
+        tp_map = {c["cell"]: c["trade_potential"] for c in civ["cities"]}
+
+        for city in civ["cities"]:
+            cc = city["cell"]
+            # BFS/Dijkstra through road graph to find all reachable cities + distance
+            road_trade = 0.0
+            visited_cities = {cc: 0}
+            queue = [(0, cc)]
+            while queue:
+                d_so_far, cur = queue.pop(0)
+                for (nb_city, seg_d) in road_graph.get(cur, []):
+                    total_d = d_so_far + seg_d
+                    if nb_city not in visited_cities or total_d < visited_cities[nb_city]:
+                        visited_cities[nb_city] = total_d
+                        queue.append((total_d, nb_city))
+
+            for other_cell, road_d in visited_cities.items():
+                if other_cell == cc or road_d <= 0:
+                    continue
+                # Trade received = other city's potential, decaying with distance
+                road_trade += tp_map.get(other_cell, 0) / (1 + road_d * 0.08)
+
+            city["road_trade"] = road_trade
+            city["trade"] = city["trade_potential"] + road_trade
+            city["wealth"] = city["wealth"] + city["trade"] * 0.008 + city_gold * 0.001
+            trade_out += city["trade"]
+
+        civ["farm_output"]  = farm_out
+        civ["ore_output"]   = ore_out
+        civ["stone_output"] = stone_out
+        civ["metal_output"] = metal_out
+        civ["trade_output"] = trade_out
+
+        civ["food"]   += farm_out * 0.8 - civ["population"] * 0.015
+        civ["gold"]   += raw_gold * 0.3 + trade_out * 0.015 + len(civ["territory"]) * 0.015
+        civ["wealth"]  = max(0, civ["gold"] * 0.3 + trade_out * 0.5 + (ore_out + stone_out + metal_out * 3) * 0.2)
+
+        # ── Fort metal upkeep ─────────────────────────────────────────────
+        # Each fort consumes metal per level per tick. The civ accumulates
+        # metal_output into a stockpile and forts drain it. If the stockpile
+        # runs dry, a random fort is downgraded a level (or razed).
+        civ.setdefault("metal_stock", 0.0)
+        civ["metal_stock"] += metal_out * 0.6
+        fort_cells = [
+            c for c in civ["territory"]
+            if 0 <= c < N and impr[c] % 10 == IMP.FORT
+        ]
+        total_upkeep = 0.0
+        for fc in fort_cells:
+            lvl = impr[fc] // 10 + 1
+            total_upkeep += FORT_METAL_UPKEEP * lvl
+        if civ["metal_stock"] >= total_upkeep:
+            civ["metal_stock"] -= total_upkeep
+        else:
+            # Insufficient metal — burn whatever's left and degrade a fort
+            civ["metal_stock"] = 0.0
+            if fort_cells:
+                fc = random.choice(fort_cells)
+                lvl_idx = impr[fc] // 10  # 0-based level - 1
+                if lvl_idx > 0:
+                    impr[fc] -= 10
+                    civ["events"].append(f"Year {civ['age']}: A Fort was downgraded — supply shortage")
+                else:
+                    impr[fc] = IMP.NONE
+                    civ["events"].append(f"Year {civ['age']}: A Fort fell into ruin — no metal")
+        # Cap stockpile so it can't grow without bound
+        civ["metal_stock"] = min(civ["metal_stock"], 80.0)
+
+        # ── Logistic population growth per city ───────────────────────────
+        # dp/dt = r * p * (K - p) / K  (discrete approximation)
+        GROWTH_RATE = 0.008
+        for city in civ["cities"]:
+            p = city["population"]
+            K = city["carrying_cap"]
+            dp = GROWTH_RATE * p * (K - p) / max(K, 1)
+            city["population"] = p + dp
+
+        # Remove cities that drop below 20 population (if they are not the capital)
+        # Note: Capital is the first city in the list.
+        surviving_cities = []
+        for i, city in enumerate(civ["cities"]):
+            if i == 0 or city["population"] >= 7:
+                surviving_cities.append(city)
+            else:
+                civ["events"].append(f"Year {civ['age']}: {city['name']} was abandoned due to low population.")
+        
+        civ["cities"] = surviving_cities
+        civ["population"]  = sum(c["population"] for c in civ["cities"])
+        civ["tech"]       += 0.007 * math.log2(civ["population"] + 1) * (1 + len(civ["cities"]) * 0.08)
+        civ["culture"]    += 0.004 * math.log2(len(civ["territory"]) + 1)
+        civ["military"]    = max(8.0, civ["population"] * 0.14 + civ["tech"] * 2 + (metal_out * 4.0 + ore_out * 0.5) * 0.1)
+        civ["integrity"]   = min(1.0, max(0.1,
+            civ["integrity"]
+            + civ["culture"] * 0.0002
+            - (0.001 if len(civ["territory"]) > 80 else 0)
+            - (0.0004 if civ["age"] > 100 else 0)
+            + (0.0001 if civ["wealth"] > 100 else 0)
+        ))
+
+        # Advanced Structure Placement
+        if tick % 7 == 0 and civ["gold"] > 25 and civ["territory"]:
+            cells = list(civ["territory"])
+            random.shuffle(cells)
+            for c in cells:
+                imp = impr[c] % 10
+                if imp == IMP.NONE:
+                    # Port
+                    if cell_coastal(c, ter):
+                        impr[c] = IMP.PORT
+                        civ["gold"] -= 15.0
+                        break
+                    
+                    # Windmill
+                    nearby_farms = sum(1 for n in neighbors(c) if 0 <= n < N and impr[n] % 10 == IMP.FARM)
+                    if nearby_farms >= 4:
+                        impr[c] = IMP.WINDMILL
+                        civ["gold"] -= 20.0
+                        break
+                
+                # Smithery
+                if imp == IMP.NONE and ore_out > 2 and metal_out < ore_out:
+                    impr[c] = IMP.SMITHERY
+                    civ["gold"] -= 40.0
+                    break
+        
+        # Additional Advanced Structure Placement to build more structures
+        if tick % 4 == 0 and civ["gold"] > 40 and civ["territory"]:
+            cells = list(civ["territory"])
+            random.shuffle(cells)
+            for c in cells:
+                imp = impr[c] % 10
+                if imp == IMP.NONE:
+                    # Port 2
+                    if cell_coastal(c, ter):
+                        impr[c] = IMP.PORT
+                        civ["gold"] -= 15.0
+                        break
+                        
+                    # Windmill 2
+                    nearby_farms = sum(1 for n in neighbors(c) if 0 <= n < N and impr[n] % 10 == IMP.FARM)
+                    if nearby_farms >= 4:
+                        impr[c] = IMP.WINDMILL
+                        civ["gold"] -= 20.0
+                        break
+
+        # Build improvements
+        if tick % 3 == 0 and civ["gold"] > 8 and civ["territory"]:
+            cells = list(civ["territory"])
+            for _ in range(4):
+                c = cells[int(random.random() * len(cells))]
+                
+                # find which city owns this cell
+                foc = FOCUS.FARMING
+                for city in civ["cities"]:
+                    if c in city.get("tiles", []):
+                        foc = city.get("focus", FOCUS.FARMING)
+                        break
+
+                if impr[c] == IMP.NONE:
+                    bi = best_improvement(ter, res, c, rivers, foc)
+                    if bi != IMP.NONE:
+                        impr[c] = bi
+                        civ["gold"] -= 1.5
+                        break
+
+        # Upgrade farms/quarries/etc
+        if tick % 5 == 0 and civ["gold"] > 15 and civ["territory"]:
+            upgraded = 0
+            for city in civ["cities"]:
+                if civ["gold"] < 15:
+                    break
+                for cell in city.get("tiles", []):
+                    imp_raw = impr[cell]
+                    imp_type = imp_raw % 10
+                    lvl = imp_raw // 10 + 1
+                    max_lvl = 20 if imp_type == IMP.FARM else 5
+                    if imp_type in (IMP.FARM, IMP.MINE, IMP.PORT, IMP.SMITHERY, IMP.WINDMILL, IMP.FORT) and lvl < max_lvl:
+                        cost = 15 * (lvl ** 2) if imp_type == IMP.FARM else 15 * lvl * 1.5
+                        if civ["gold"] >= cost:
+                            impr[cell] += 10
+                            civ["gold"] -= cost
+                            upgraded += 1
+                            if upgraded >= 3:
+                                break
+                if upgraded >= 3:
+                    break
+
+        # Gather all city cells once for settle scoring and city founding
+        all_city_cells = [ci["cell"] for other in alive for ci in other["cities"]]
+
+        # City founding — use cached settlement candidate from expansion
+        at_war = any(
+            w["a_id"] == civ["id"] or w["d_id"] == civ["id"]
+            for w in wars.values()
+        )
+        largest = max((c["population"] for c in civ["cities"]), default=0)
+        should_found = (
+            not at_war
+            and len(civ["territory"]) > (len(civ["cities"]) + 1) * 40
+            and largest > 200
+            and civ["gold"] > 40
+            and len(civ["cities"]) < len(civ["territory"]) // 35 + 1
+        )
+        best_cell = civ.get("_settle_candidate", -1)
+        if should_found and best_cell != -1 and best_cell in civ["territory"]:
+            # Re-validate: score must be positive (soft distance check passed)
+            sc = _settle_score(best_cell, ter, rivers, res, all_city_cells, params)
+            if sc is not None and sc > 0:
+                cn = gen_city_name(civ["onom"])
+                new_city = {
+                    "cell":         best_cell,
+                    "name":         cn,
+                    "population":   25.0,
+                    "is_capital":   False,
+                    "founded":      tick,
+                    "trade":        3.0,
+                    "wealth":       3.0,
+                    "focus":        random.choice([FOCUS.FARMING, FOCUS.MINING, FOCUS.DEFENSE]),
+                    "near_river":   cell_on_river(best_cell, rivers),
+                    "coastal":      cell_coastal(best_cell, ter),
+                    "food_production": 0.0,
+                    "carrying_cap":   50,
+                    "tiles":        [],
+                    "farm_tiles":   [],
+                    "last_dmg_tick": -999,
+                }
+                new_city["max_hp"] = _city_max_hp(new_city, impr)
+                new_city["hp"]     = new_city["max_hp"]
+                civ["cities"].append(new_city)
+                civ["gold"] -= 20
+                civ["events"].append(f"Year {civ['age']}: Founded {cn}")
+                add_event(f"🏘 Year {tick}: {civ['name']} founded {cn}")
+                # Reset candidate so we find a new one
+                civ.pop("_settle_candidate", None)
+                civ.pop("_settle_score", None)
+
+        # Build roads
+        if len(civ["cities"]) >= 2 and civ["gold"] > 12 and tick % 50 == 0:
+            build_road(civ, ter)
+
+        # Expansion — organic growth into unclaimed land
+        # First: auto-fill pockets (cells surrounded on 3-4 sides by own territory)
+        borders = border_cells(civ["territory"])
+        pocket_targets = [
+            c for c in borders
+            if 0 <= c < N and is_land(ter, c) and om[c] == 0
+            and sum(1 for n in neighbors(c) if n in civ["territory"]) >= 3
+        ]
+        for c in pocket_targets:
+            civ["territory"].add(c)
+            om[c] = civ["id"]
+            _eval_settle_candidate(civ, c, ter, rivers, res, all_city_cells, params)
+
+        # Normal expansion
+        if (civ["food"] > 15
+                and civ["population"] > len(civ["territory"]) * 2
+                and random.random() < civ["expansion_rate"] * 0.6):
+            borders = border_cells(civ["territory"])
+            targets = [
+                c for c in borders
+                if 0 <= c < N and is_land(ter, c) and om[c] == 0
+            ]
+            # Score: neighbor count dominates so surrounded cells fill fast
+            targets.sort(key=lambda c: (
+                sum(1 for n in neighbors(c) if n in civ["territory"]) * 5
+                + (4 if c in res else 0)
+                + (params["river_pref"] * 0.5 if cell_on_river(c, rivers) else 0)
+                + (2 if ter[c] in (T.PLAINS, T.GRASS) else 0)
+                - (3 if ter[c] >= T.MTN else 0)
+                + random.random() * 3.0
+            ), reverse=True)
+            cnt = min(int(len(civ["territory"]) * 0.09) + 1, len(targets), 9)
+            for c in targets[:cnt]:
+                civ["territory"].add(c)
+                om[c] = civ["id"]
+                _eval_settle_candidate(civ, c, ter, rivers, res, all_city_cells, params)
+
+        # War combat is now resolved once per tick in _tick_armies(); the
+        # per-civ block only does post-combat housekeeping (encirclement +
+        # front smoothing) so captured pockets get cleaned up.
+        my_wars = [
+            (k, w) for k, w in wars.items()
+            if w["a_id"] == civ["id"] or w["d_id"] == civ["id"]
+        ]
+        for wk, war in my_wars:
+            eid = war["d_id"] if war["a_id"] == civ["id"] else war["a_id"]
+            enemy = next((c for c in alive if c["id"] == eid), None)
+            if not enemy or not enemy["alive"]:
+                wars.pop(wk, None)
+                continue
+
+            # ── Encirclement: seize disconnected enemy territory ──────────
+            if enemy["territory"]:
+                e_regions = find_regions(list(enemy["territory"]))
+                if len(e_regions) > 1:
+                    e_regions.sort(key=lambda r: -len(r))
+                    for reg in e_regions[1:]:
+                        for c in reg:
+                            enemy["territory"].discard(c)
+                            civ["territory"].add(c)
+                            om[c] = civ["id"]
+                            taken_city = next((ci for ci in enemy["cities"] if ci["cell"] == c), None)
+                            if taken_city:
+                                enemy["cities"] = [ci for ci in enemy["cities"] if ci["cell"] != c]
+                                taken_city["is_capital"] = False
+                                civ["cities"].append(taken_city)
+                                add_event(f"🔥 Year {tick}: {civ['name']} seized {taken_city['name']}!")
+                                cap_key = "captured_cities_a" if war["a_id"] == civ["id"] else "captured_cities_d"
+                                war.setdefault(cap_key, []).append(c)
+
+            # ── Front-line smoothing: reclaim isolated protrusions ────────
+            front_smooth = [
+                c for c in border_cells(civ["territory"])
+                if 0 <= c < N and om[c] == eid
+                and sum(1 for n in neighbors(c) if n in civ["territory"]) >= 3
+            ]
+            for c in front_smooth:
+                enemy["territory"].discard(c)
+                civ["territory"].add(c)
+                om[c] = civ["id"]
+
+        # Prune cities/roads that lost territory
+        civ["cities"] = [c for c in civ["cities"] if c["cell"] in civ["territory"]]
+        civ["roads"]  = [r for r in civ["roads"]  if r["from"] in civ["territory"] and r["to"] in civ["territory"]]
+
+        # Restore a capital if lost
+        if civ["cities"] and not any(c["is_capital"] for c in civ["cities"]):
+            civ["cities"][0]["is_capital"] = True
+            civ["capital"] = civ["cities"][0]["cell"]
+
+        # Check if at war
+        civ_at_war = any(
+            w["a_id"] == civ["id"] or w["d_id"] == civ["id"]
+            for w in wars.values()
+        )
+
+        # Surrender: if at war with no cities, get absorbed by the enemy
+        if not civ["cities"] and civ_at_war:
+            # Find the enemy in the war
+            for wk, war in list(wars.items()):
+                if war["a_id"] == civ["id"] or war["d_id"] == civ["id"]:
+                    conqueror_id = war["d_id"] if war["a_id"] == civ["id"] else war["a_id"]
+                    conqueror = next((c for c in alive if c["id"] == conqueror_id), None)
+                    if conqueror:
+                        for c in list(civ["territory"]):
+                            civ["territory"].discard(c)
+                            conqueror["territory"].add(c)
+                            om[c] = conqueror_id
+                        civ["alive"] = False
+                        add_event(f"🏳 Year {tick}: {civ['name']} surrendered to {conqueror['name']}!")
+                        civ["events"].append(f"Year {civ['age']}: Surrendered to {conqueror['name']}")
+                        conqueror["events"].append(f"Year {conqueror['age']}: Conquered {civ['name']}")
+                    wars.pop(wk, None)
+                    break
+            continue  # skip rest of survival for this dead civ
+
+        # Survival — civs never disappear (when not at war)
+        if civ["food"] < -30:
+            civ["food"] = 0
+            add_event(f"🍞 Year {tick}: {civ['name']} endured a famine")
+        if civ["population"] < 15:
+            civ["population"] = 15
+            for city in civ["cities"]:
+                city["population"] = max(city["population"], 10)
+        # If territory got too small, reclaim a few surrounding cells
+        if len(civ["territory"]) < 4 and civ["cities"]:
+            cap = civ["cities"][0]["cell"]
+            sx, sy = cap % W, cap // W
+            for dy in range(-1, 2):
+                for dx in range(-1, 2):
+                    ni = (sy + dy) * W + (sx + dx)
+                    if 0 <= ni < N and is_land(ter, ni) and om[ni] == 0:
+                        civ["territory"].add(ni)
+                        om[ni] = civ["id"]
+        # If all cities lost (peacetime only), refound
+        if not civ["cities"] and civ["territory"] and not civ_at_war:
+            all_other_cities = [
+                ci["cell"] for other in alive if other["id"] != civ["id"]
+                for ci in other["cities"]
+            ]
+            best_refound = None
+            best_min_d = -1
+            for cell in list(civ["territory"])[:80]:
+                if ter[cell] in (T.MTN, T.SNOW) or ter[cell] <= T.COAST:
+                    continue
+                md = min((dist(cell, oc) for oc in all_other_cities), default=999)
+                if md > best_min_d:
+                    best_min_d = md
+                    best_refound = cell
+            cap_cell = best_refound if best_refound is not None else next(iter(civ["territory"]))
+            cn = gen_city_name(civ["onom"])
+            refounded = {
+                "cell": cap_cell, "name": cn, "population": 20.0,
+                "is_capital": True, "founded": tick, "trade": 3.0,
+                "wealth": 5.0, "focus": random.choice([FOCUS.FARMING, FOCUS.MINING, FOCUS.DEFENSE]),
+                "near_river": cell_on_river(cap_cell, rivers),
+                "coastal": cell_coastal(cap_cell, ter),
+                "food_production": 0.0, "carrying_cap": 50,
+                "tiles": [], "farm_tiles": [],
+                "last_dmg_tick": -999,
+            }
+            refounded["max_hp"] = _city_max_hp(refounded, impr)
+            refounded["hp"]     = refounded["max_hp"]
+            civ["cities"] = [refounded]
+            civ["capital"] = cap_cell
+            add_event(f"🏛 Year {tick}: {civ['name']} refounded {cn}")
+
+    # ── Army tick (movement, behavior, combat, fort respawn) ─────────────────
+    _tick_armies(alive, wars, ter, impr, om, tick, add_event)
+
+    # ── City HP regen (heal slowly when not under attack) ────────────────────
+    for civ in alive:
+        for city in civ["cities"]:
+            _ensure_city_hp(city, impr)
+            # Recompute max_hp in case a fort was built/destroyed beneath the city
+            city["max_hp"] = _city_max_hp(city, impr)
+            if city["hp"] < city["max_hp"] and tick - city.get("last_dmg_tick", -999) > 8:
+                city["hp"] = min(city["max_hp"], city["hp"] + CITY_HP_REGEN)
+
+    # ── Fragmentation (disabled) ─────────────────────────────────────────────
+    new_civs = []
+
+    # Keep only the largest contiguous region per civ.
+    # Disconnected pockets go to the surrounding civ (if any), not unclaimed.
+    for civ in alive:
+        if civ["alive"] and len(civ["territory"]) > 8:
+            regions = find_regions(list(civ["territory"]))
+            if len(regions) > 1:
+                regions.sort(key=lambda r: -len(r))
+                for r in regions[1:]:
+                    # Find who surrounds this pocket
+                    surround_counts: dict = {}
+                    for c in r:
+                        for n in neighbors(c):
+                            nid = om[n] if 0 <= n < N else 0
+                            if nid != 0 and nid != civ["id"]:
+                                surround_counts[nid] = surround_counts.get(nid, 0) + 1
+                    # Give pocket to the most surrounding neighbor, or unclaimed
+                    new_owner_id = max(surround_counts, key=surround_counts.get) if surround_counts else 0
+                    new_owner = next((cv for cv in alive if cv["id"] == new_owner_id), None) if new_owner_id else None
+                    for c in r:
+                        civ["territory"].discard(c)
+                        if new_owner:
+                            new_owner["territory"].add(c)
+                            om[c] = new_owner_id
+                        else:
+                            om[c] = 0
+                        # Transfer cities in the pocket
+                        taken_city = next((ci for ci in civ["cities"] if ci["cell"] == c), None)
+                        if taken_city and new_owner:
+                            civ["cities"] = [ci for ci in civ["cities"] if ci["cell"] != c]
+                            taken_city["is_capital"] = False
+                            new_owner["cities"].append(taken_city)
+                civ["cities"] = [c for c in civ["cities"] if c["cell"] in civ["territory"]]
+
+    return new_civs

@@ -1,0 +1,9 @@
+{
+    "PRE": ["Ael","Cael","Eil","Fael","Gala","Ith","Lia","Mae","Nae","Olo","Rin","Sae","Taen","Vae","Yll","Zin"],
+    "MID_S": ["an","en","in","on","un","ael","eil","ion","or","yl"],
+    "SUF_S": ["ia","iel","ien","ion","ir","is","or","us","ya","yl"],
+    "CPRE": ["Sun","Moon","Star","Silver","Gold","White","Crystal","High ","Fair ","","","","","",""],
+    "CSUF": ["grove","wood","glade","fall","water","light","song","rest","haven","pool","stream","hollow","vale","mead"],
+    "LF": ["Aelrin","Caelen","Eilian","Faelor","Galad","Ithil","Liad","Maenil","Naelis","Olorin","Rion","Saelin","Taenor","Vaelis","Yllara","Ziniel"],
+    "LL": ["the Fair","the Bright","Starwhisper","Moonshadow","Silverleaf","the Swift","the Ancient","Windrider","Dawnchaser","the Serene","the Graceful","Lightbringer"]
+}

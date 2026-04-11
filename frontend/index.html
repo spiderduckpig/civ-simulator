@@ -152,6 +152,87 @@
     ::-webkit-scrollbar       { width: 4px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+
+    /* ── Diplomacy modal ──────────────────────────────────────── */
+    #diplo-modal {
+      display: none; position: fixed; top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.75); z-index: 100;
+      overflow: auto; padding: 40px 30px;
+    }
+    #diplo-content {
+      max-width: 1280px; margin: 0 auto;
+      background: #0d1117; border: 1px solid #30363d;
+      border-radius: 6px; padding: 14px 18px;
+      color: #c9d1d9;
+    }
+    #diplo-content .diplo-header {
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid #30363d; padding-bottom: 6px; margin-bottom: 10px;
+    }
+    #diplo-content h2 { font-size: 14px; color: #f0883e; letter-spacing: 1px; }
+    #diplo-close {
+      background: #da3633; color: #fff; padding: 3px 10px;
+      border: none; border-radius: 3px; cursor: pointer; font-weight: 700;
+      font-family: inherit;
+    }
+    #diplo-content .diplo-section { margin: 12px 0 6px; font-size: 10px;
+      color: #8b949e; text-transform: uppercase; letter-spacing: 1px;
+      font-weight: 700; }
+    #diplo-content table { border-collapse: collapse; font-size: 9px; }
+    #diplo-content th, #diplo-content td {
+      padding: 2px 4px; text-align: center;
+      border: 1px solid #1c2128; vertical-align: middle;
+    }
+    #diplo-content th {
+      background: #161b22; color: #c9d1d9; font-weight: 600;
+      writing-mode: vertical-rl; transform: rotate(180deg);
+      min-height: 80px; max-width: 18px;
+    }
+    #diplo-content th.row-head {
+      writing-mode: horizontal-tb; transform: none;
+      text-align: right; padding-right: 6px; min-height: 0;
+      max-width: none;
+    }
+    #diplo-content .rel-cell { min-width: 22px; font-weight: 600; }
+    #diplo-content .rel-self { background: #1c2128; }
+    #diplo-content .war-list { display: flex; flex-direction: column; gap: 6px; }
+    #diplo-content .war-card {
+      background: #161b22; border: 1px solid #30363d; border-radius: 4px;
+      padding: 6px 10px; font-size: 10px;
+    }
+    #diplo-content .war-card .war-head {
+      display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
+    }
+    #diplo-content .war-card .war-name { font-weight: 700; }
+    #diplo-content .war-card .war-role {
+      font-size: 8px; padding: 1px 4px; border-radius: 2px;
+      font-weight: 700; text-transform: uppercase;
+    }
+    #diplo-content .war-role.agg { background: #da3633; color: #fff; }
+    #diplo-content .war-role.def { background: #1a6a9e; color: #fff; }
+    #diplo-content .morale-bar {
+      display: inline-block; width: 90px; height: 6px;
+      background: #1c2128; border-radius: 2px; vertical-align: middle;
+      overflow: hidden; position: relative;
+    }
+    #diplo-content .morale-bar span {
+      display: block; height: 100%;
+    }
+    #diplo-content .power-list { display: flex; flex-direction: column; }
+    #diplo-content .power-row {
+      display: flex; align-items: center; gap: 6px; padding: 2px 4px;
+      font-size: 10px;
+    }
+    #diplo-content .power-row .dot { width: 9px; height: 9px; border-radius: 2px; }
+    #diplo-content .power-row .pname { flex: 1; }
+    #diplo-content .power-row .pbar {
+      display: inline-block; height: 5px; background: #30363d; border-radius: 2px;
+      position: relative; overflow: hidden; min-width: 50px;
+    }
+    #diplo-content .power-row .pbar span {
+      display: block; height: 100%; background: #58a6ff;
+    }
   </style>
 </head>
 <body>
@@ -165,7 +246,7 @@
   <span id="lbl-wars"></span>
   <span id="lbl-zoom">1.0×</span>
   <div class="spacer"></div>
-  <button id="btn-mapmode" class="btn">🌍 Ter</button>
+  <button id="btn-mapmode" class="btn">Ter</button>
   <button id="btn-play"    class="btn btn-green">▶</button>
   <select id="sel-speed">
     <option value="0.5">½×</option>
@@ -174,7 +255,9 @@
     <option value="4">4×</option>
   </select>
   <button id="btn-reset"    class="btn">🔄</button>
+  <button id="btn-diplo"    class="btn btn-purple">Diplo</button>
   <button id="btn-settings" class="btn">⚙</button>
+  <label class="chk"><input type="checkbox" id="chk-levels" /> Lvls</label>
   <label class="chk"><input type="checkbox" id="chk-res" checked /> Res</label>
 </div>
 
@@ -227,6 +310,17 @@
     </div>
   </div>
 
+</div>
+
+<!-- Diplomacy modal -->
+<div id="diplo-modal">
+  <div id="diplo-content">
+    <div class="diplo-header">
+      <h2>DIPLOMACY</h2>
+      <button id="diplo-close">Close</button>
+    </div>
+    <div id="diplo-body"></div>
+  </div>
 </div>
 
 <!-- Connection status for debugging -->

@@ -1,0 +1,127 @@
+W, H, CELL = 160, 100, 6
+PX_W, PX_H = W * CELL, H * CELL
+N = W * H
+
+
+class T:
+    DEEP    = 0
+    OCEAN   = 1
+    COAST   = 2
+    BEACH   = 3
+    PLAINS  = 4
+    GRASS   = 5
+    FOREST  = 6
+    DFOREST = 7
+    HILLS   = 8
+    MTN     = 9
+    SNOW    = 10
+    DESERT  = 11
+    TUNDRA  = 12
+    SWAMP   = 13
+    JUNGLE  = 14
+
+
+TERRAIN_COLORS = {
+    T.DEEP:    "#0a1628",
+    T.OCEAN:   "#0f2847",
+    T.COAST:   "#1a4a6e",
+    T.BEACH:   "#d4c078",
+    T.PLAINS:  "#7ab648",
+    T.GRASS:   "#5a9e3a",
+    T.FOREST:  "#2d7a2d",
+    T.DFOREST: "#1a5c1a",
+    T.HILLS:   "#8a7a50",
+    T.MTN:     "#6e6e6e",
+    T.SNOW:    "#e8e8f0",
+    T.DESERT:  "#d4a84b",
+    T.TUNDRA:  "#a8b8b0",
+    T.JUNGLE:  "#1a6830",
+    T.SWAMP:   "#3a5a3a",
+}
+
+TERRAIN_NAMES = {
+    T.DEEP:    "Deep Ocean",
+    T.OCEAN:   "Ocean",
+    T.COAST:   "Coast",
+    T.BEACH:   "Beach",
+    T.PLAINS:  "Plains",
+    T.GRASS:   "Grassland",
+    T.FOREST:  "Forest",
+    T.DFOREST: "Dense Forest",
+    T.HILLS:   "Hills",
+    T.MTN:     "Mountains",
+    T.SNOW:    "Snow Peak",
+    T.DESERT:  "Desert",
+    T.TUNDRA:  "Tundra",
+    T.JUNGLE:  "Jungle",
+    T.SWAMP:   "Swamp",
+}
+
+RESOURCE_ICONS = {
+    "iron": "⛏", "gold": "✦", "horses": "🐎", "wheat": "🌾",
+    "fish": "🐟", "gems": "💎", "wood": "🪵", "stone": "🪨",
+    "spices": "🌶", "ivory": "🦷",
+}
+
+
+class IMP:
+    NONE     = 0
+    FARM     = 1
+    MINE     = 2  # Produces Ore
+    LUMBER   = 3
+    QUARRY   = 4  # Produces Stone
+    PASTURE  = 5
+    WINDMILL = 6
+    FORT     = 7
+    PORT     = 8
+    SMITHERY = 9
+
+IMP_COLORS = {
+    IMP.FARM:     "#c8a000",
+    IMP.MINE:     "#666666",
+    IMP.LUMBER:   "#44aa22",
+    IMP.QUARRY:   "#999999",
+    IMP.PASTURE:  "#77bb55",
+    IMP.WINDMILL: "#e8d088",
+    IMP.FORT:     "#444444",
+    IMP.PORT:     "#336699",
+    IMP.SMITHERY: "#b84422",
+}
+
+# Bit-packed encoding: low 5 bits = type (0-31), remaining bits = level-1.
+# Use helpers in engine.improvements to pack/unpack — never touch bits directly.
+IMP_TYPE_BITS = 5
+IMP_TYPE_MASK = (1 << IMP_TYPE_BITS) - 1     # 0x1F
+IMP_LEVEL_STEP = 1 << IMP_TYPE_BITS          # 32
+
+IMP_NAMES = {
+    IMP.NONE:     "—",
+    IMP.FARM:     "Farm",
+    IMP.MINE:     "Mine",
+    IMP.LUMBER:   "Lumber",
+    IMP.QUARRY:   "Quarry",
+    IMP.PASTURE:  "Pasture",
+    IMP.WINDMILL: "Windmill",
+    IMP.FORT:     "Fort",
+    IMP.PORT:     "Port",
+    IMP.SMITHERY: "Smithery",
+}
+
+class FOCUS:
+    FARMING = 0
+    MINING  = 1
+    DEFENSE = 2
+
+CAN_FARM = {T.PLAINS, T.GRASS, T.JUNGLE, T.SWAMP}
+RES_LIST = ["iron", "gold", "horses", "wheat", "fish", "gems", "wood", "stone", "spices", "ivory"]
+
+CIV_PALETTE = ["#e74c3c","#3498db","#f39c12","#2ecc71","#9b59b6","#e67e22","#1abc9c","#c0392b","#2980b9","#27ae60","#8e44ad","#d35400","#16a085","#f1c40f","#e84393","#00b894","#6c5ce7","#fd79a8","#00cec9","#d63031","#0984e3","#00b4d8","#a29bfe","#636e72","#b2bec3"]
+
+MIN_CITY_DIST = 9
+
+DEFAULT_PARAMS = {
+    "river_pref":  3.0,
+    "coast_pref":  2.5,
+    "max_civs":    14,
+    "spawn_rate":  35,
+}

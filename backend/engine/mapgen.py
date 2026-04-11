@@ -28,8 +28,8 @@ def gen_rivers(hm: list, ter: list, seed: int) -> dict:
     Sources must be well-spaced apart.
     """
     rng = make_noise(seed + 7777)
-    num_attempts = 50
-    min_source_dist = 5  # min Manhattan distance between river sources
+    num_attempts = 150
+    min_source_dist = 6  # min Manhattan distance between river sources
     all_paths = []
     global_used: set = set()
     sources: list = []  # track source cells for spacing
@@ -61,16 +61,21 @@ def gen_rivers(hm: list, ter: list, seed: int) -> dict:
         cur = start_cell
         reached_end = False
 
-        for step in range(300):
+        for step in range(800):
             # Erosion power grows with river length (more water downstream)
-            erosion_reach  = 0.12 + step * 0.04    # how far "uphill" we can look
-            erosion_carve  = 0.04 + step * 0.002    # how much we carve the chosen cell
+            erosion_reach  = 0.3 + step * 0.05   # how far "uphill" we can look
+            erosion_carve  = 0.02 + step * 0.001    # how much we carve the chosen cell
             erosion_spread = erosion_carve * 0.3     # how much we carve neighbours
 
             # Gather all non-visited neighbours
             candidates = []
             for n in neighbors(cur):
                 if n in visited:
+                    continue
+                # Optional: penalize coiling by checking if n touches other visited cells
+                # To prevent massive twisty clumps, skip candidates touching older parts of the river
+                touches_old = sum(1 for nn in neighbors(n) if nn in visited and nn != cur)
+                if touches_old > 0:
                     continue
                 candidates.append(n)
 
@@ -112,7 +117,7 @@ def gen_rivers(hm: list, ter: list, seed: int) -> dict:
 
             cur = best_n
 
-        if reached_end and len(path) >= 5:
+        if reached_end and len(path) >= 15:
             all_paths.append(path)
             global_used.update(path)
             sources.append(start_cell)
@@ -123,12 +128,19 @@ def gen_rivers(hm: list, ter: list, seed: int) -> dict:
 
     return {"paths": all_paths, "cell_river": cell_river}
 
-
-def cell_on_river(cell: int, rivers: dict) -> bool:
-    return cell in rivers["cell_river"]
-
-
 def cell_coastal(cell: int, ter: list) -> bool:
+    for n in neighbors(cell):
+        if 0 <= n < N and ter[n] in (T.OCEAN, T.COAST, T.DEEP):
+            return True
+    return False
+
+
+def cell_river_mouth(cell: int, ter: list, rivers: dict) -> bool:
+    """A river mouth is a land cell on a river adjacent to ocean/coast."""
+    if cell not in rivers["cell_river"]:
+        return False
+    if ter[cell] <= T.COAST:
+        return False
     for n in neighbors(cell):
         if 0 <= n < N and ter[n] in (T.OCEAN, T.COAST, T.DEEP):
             return True
