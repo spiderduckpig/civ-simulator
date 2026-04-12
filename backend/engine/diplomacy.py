@@ -21,6 +21,7 @@ import random
 from typing import Dict, Optional
 
 from .helpers import war_key
+from .models import Civ, War
 
 
 # ── Relation drift constants ─────────────────────────────────────────
@@ -52,38 +53,41 @@ MORALE_PEACE_THRESHOLD = -0.18
 
 # ── Setup / ticking ──────────────────────────────────────────────────
 
-def ensure_civ_diplo(civ: dict, all_civs: list) -> None:
+def ensure_civ_diplo(civ: Civ, all_civs: list) -> None:
     """Initialise / backfill diplomacy fields on a civ."""
-    civ.setdefault("relations", {})
-    civ.setdefault("allies", set())
+    if not hasattr(civ, "relations"):
+        civ.relations = {}
+    if not hasattr(civ, "allies"):
+        civ.allies = set()
     # Migrate legacy peacefulness -> aggressiveness if needed
-    if "aggressiveness" not in civ:
-        civ["aggressiveness"] = 1.0 - civ.get("peacefulness", 0.5)
-    civ.setdefault("power", 0.0)
+    if not hasattr(civ, "aggressiveness"):
+        civ.aggressiveness = 1.0 - getattr(civ, "peacefulness", 0.5)
+    if not hasattr(civ, "power"):
+        civ.power = 0.0
     for other in all_civs:
-        if other["id"] == civ["id"]:
+        if other.id == civ.id:
             continue
-        civ["relations"].setdefault(other["id"], 0.0)
+        civ.relations.setdefault(other.id, 0.0)
 
 
-def compute_power(civ: dict) -> float:
+def compute_power(civ: Civ) -> float:
     """Scale-invariant power score. Higher = stronger bloc."""
     return (
-        civ.get("military", 0.0) * 1.0
-        + civ.get("tech", 1.0) * 4.0
-        + len(civ.get("territory", [])) * 0.5
-        + civ.get("wealth", 0.0) * 0.15
-        + len(civ.get("cities", [])) * 6.0
+        getattr(civ, "military", 0.0) * 1.0
+        + getattr(civ, "tech", 1.0) * 4.0
+        + len(getattr(civ, "territory", [])) * 0.5
+        + getattr(civ, "wealth", 0.0) * 0.15
+        + len(getattr(civ, "cities", [])) * 6.0
     )
 
 
-def bloc_power(civ: dict, civs_by_id: dict) -> float:
+def bloc_power(civ: Civ, civs_by_id: dict) -> float:
     """Civ power + power of every living ally."""
-    total = civ.get("power", 0.0)
-    for aid in civ.get("allies", set()):
+    total = getattr(civ, "power", 0.0)
+    for aid in getattr(civ, "allies", set()):
         ally = civs_by_id.get(aid)
-        if ally and ally.get("alive"):
-            total += ally.get("power", 0.0)
+        if ally and getattr(ally, "alive", False):
+            total += getattr(ally, "power", 0.0)
     return total
 
 
@@ -91,9 +95,9 @@ def _clamp(x: float, lo: float = REL_MIN, hi: float = REL_MAX) -> float:
     return max(lo, min(hi, x))
 
 
-def _symmetric_shift(a: dict, b: dict, delta: float) -> None:
-    a["relations"][b["id"]] = _clamp(a["relations"].get(b["id"], 0.0) + delta)
-    b["relations"][a["id"]] = _clamp(b["relations"].get(a["id"], 0.0) + delta)
+def _symmetric_shift(a: Civ, b: Civ, delta: float) -> None:
+    a.relations[b.id] = _clamp(a.relations.get(b.id, 0.0) + delta)
+    b.relations[a.id] = _clamp(b.relations.get(a.id, 0.0) + delta)
 
 
 def tick_relations(alive: list, wars: dict, border_cache: dict) -> None:
@@ -101,15 +105,15 @@ def tick_relations(alive: list, wars: dict, border_cache: dict) -> None:
     refresh each civ's cached power snapshot."""
     for civ in alive:
         ensure_civ_diplo(civ, alive)
-        civ["power"] = compute_power(civ)
+        civ.power = compute_power(civ)
 
     for i in range(len(alive)):
         for j in range(i + 1, len(alive)):
             a, b = alive[i], alive[j]
-            k = war_key(a["id"], b["id"])
+            k = war_key(a.id, b.id)
             at_war = k in wars
 
-            border = any(bc in b["territory"] for bc in border_cache[a["id"]])
+            border = any(bc in b.territory for bc in border_cache[a.id])
 
             if at_war:
                 _symmetric_shift(a, b, REL_DRIFT_WAR)
@@ -122,26 +126,26 @@ def tick_relations(alive: list, wars: dict, border_cache: dict) -> None:
 # ── War declaration ──────────────────────────────────────────────────
 
 def consider_war_declaration(
-    a: dict, b: dict, wars: dict, civs_by_id: dict, tick: int,
+    a: Civ, b: Civ, wars: dict, civs_by_id: dict, tick: int,
     k: str, border: bool,
-) -> Optional[dict]:
+) -> Optional[War]:
     """Return a new war dict if `a` should declare war on `b`, else None."""
-    if not border or k in wars or b["id"] in a.get("allies", set()):
+    if not border or k in wars or b.id in getattr(a, "allies", set()):
         return None
 
     # Count active wars this civ is already in.
     existing_wars = sum(
         1 for w in wars.values()
-        if w["a_id"] == a["id"] or w["d_id"] == a["id"]
+        if w.att == a.id or w.def_id == a.id
     )
 
     # Only the most aggressive civs will even consider a second front.
-    if existing_wars >= 1 and a.get("aggressiveness", 0.5) < 0.75:
+    if existing_wars >= 1 and getattr(a, "aggressiveness", 0.5) < 0.75:
         return None
 
-    rel = a["relations"].get(b["id"], 0.0)
+    rel = a.relations.get(b.id, 0.0)
     # Aggressiveness lets a civ shrug off worse relations before refusing war.
-    hostility = (REL_WAR_TOLERANCE - rel) * a["aggressiveness"]
+    hostility = (REL_WAR_TOLERANCE - rel) * getattr(a, "aggressiveness", 0.5)
     if hostility <= 0:
         return None
 
@@ -163,19 +167,16 @@ def consider_war_declaration(
     if random.random() >= chance:
         return None
 
-    new_war = {
-        "a_id": a["id"], "d_id": b["id"], "start_tick": tick,
-        "pre_ter_a": set(a["territory"]),
-        "pre_ter_d": set(b["territory"]),
-        "captured_cities_a": [],
-        "captured_cities_d": [],
-        "armies_a": [],
-        "armies_d": [],
-        "confidence_a": CONFIDENCE_START_AGG,
-        "confidence_d": CONFIDENCE_START_DEF,
-        "exhaustion_a": 0.0,
-        "exhaustion_d": 0.0,
-    }
+    new_war = War(
+        key=k, att=a.id, def_id=b.id, start=tick,
+        confidence_a=CONFIDENCE_START_AGG,
+        confidence_d=CONFIDENCE_START_DEF,
+        exhaustion_a=0.0,
+        exhaustion_d=0.0,
+        armies_a=[],
+        armies_d=[],
+        ended=False
+    )
     _symmetric_shift(a, b, REL_WAR_START)
     return new_war
 
@@ -183,17 +184,17 @@ def consider_war_declaration(
 # ── Alliance formation ───────────────────────────────────────────────
 
 def consider_alliance(
-    a: dict, b: dict, wars: dict, civs_by_id: dict,
+    a: Civ, b: Civ, wars: dict, civs_by_id: dict,
 ) -> bool:
     """Pair-wise alliance check. Both sides must like each other above
     REL_ALLIANCE_THRESHOLD, and neither can be at war with the other."""
-    if b["id"] in a.get("allies", set()):
+    if b.id in getattr(a, "allies", set()):
         return False
-    if war_key(a["id"], b["id"]) in wars:
+    if war_key(a.id, b.id) in wars:
         return False
 
-    rel_ab = a["relations"].get(b["id"], 0.0)
-    rel_ba = b["relations"].get(a["id"], 0.0)
+    rel_ab = a.relations.get(b.id, 0.0)
+    rel_ba = b.relations.get(a.id, 0.0)
     if rel_ab < REL_ALLIANCE_THRESHOLD or rel_ba < REL_ALLIANCE_THRESHOLD:
         return False
 
@@ -202,10 +203,10 @@ def consider_alliance(
     for civ in (a, b):
         hostile_power = 0.0
         for w in wars.values():
-            if w["a_id"] == civ["id"]:
-                enemy = civs_by_id.get(w["d_id"])
-            elif w["d_id"] == civ["id"]:
-                enemy = civs_by_id.get(w["a_id"])
+            if w.att == civ.id:
+                enemy = civs_by_id.get(w.def_id)
+            elif w.def_id == civ.id:
+                enemy = civs_by_id.get(w.att)
             else:
                 continue
             if enemy:
@@ -218,64 +219,68 @@ def consider_alliance(
     return random.random() < chance
 
 
-def form_alliance(a: dict, b: dict) -> None:
-    a.setdefault("allies", set()).add(b["id"])
-    b.setdefault("allies", set()).add(a["id"])
+def form_alliance(a: Civ, b: Civ) -> None:
+    if not hasattr(a, "allies"):
+        a.allies = set()
+    a.allies.add(b.id)
+    if not hasattr(b, "allies"):
+        b.allies = set()
+    b.allies.add(a.id)
     _symmetric_shift(a, b, REL_ALLIANCE_BONUS)
 
 
-def break_alliances_with(civ: dict, civs_by_id: dict) -> None:
+def break_alliances_with(civ: Civ, civs_by_id: dict) -> None:
     """Called when `civ` dies — remove it from every ally's set."""
-    for aid in list(civ.get("allies", set())):
+    for aid in list(getattr(civ, "allies", set())):
         ally = civs_by_id.get(aid)
         if ally:
-            ally.get("allies", set()).discard(civ["id"])
-    civ["allies"] = set()
+            getattr(ally, "allies", set()).discard(civ.id)
+    civ.allies = set()
 
 
 # ── War morale hooks ─────────────────────────────────────────────────
 
-def tick_war_morale(war: dict) -> None:
+def tick_war_morale(war: War) -> None:
     """Per-tick baseline drift. Confidence slowly equilibrates to 0.5."""
-    war["exhaustion_a"] = min(1.0, war.get("exhaustion_a", 0.0) + EXH_DRIFT_PER_TICK)
-    war["exhaustion_d"] = min(1.0, war.get("exhaustion_d", 0.0) + EXH_DRIFT_PER_TICK)
+    war.exhaustion_a = min(1.0, getattr(war, "exhaustion_a", 0.0) + EXH_DRIFT_PER_TICK)
+    war.exhaustion_d = min(1.0, getattr(war, "exhaustion_d", 0.0) + EXH_DRIFT_PER_TICK)
     for side in ("a", "d"):
         key = f"confidence_{side}"
-        v = war.get(key, 0.5)
-        war[key] = v + (0.5 - v) * 0.002
+        v = getattr(war, key, 0.5)
+        setattr(war, key, v + (0.5 - v) * 0.002)
 
 
-def should_sue_for_peace(war: dict) -> bool:
+def should_sue_for_peace(war: War) -> bool:
     """Either side breaking ends the war: the winner wins peace, the
     loser needs it."""
-    score_a = war.get("confidence_a", 0.5) - war.get("exhaustion_a", 0.0)
-    score_d = war.get("confidence_d", 0.5) - war.get("exhaustion_d", 0.0)
+    score_a = getattr(war, "confidence_a", 0.5) - getattr(war, "exhaustion_a", 0.0)
+    score_d = getattr(war, "confidence_d", 0.5) - getattr(war, "exhaustion_d", 0.0)
     return score_a < MORALE_PEACE_THRESHOLD or score_d < MORALE_PEACE_THRESHOLD
 
 
-def apply_city_lost(war: dict, loser_side: str) -> None:
+def apply_city_lost(war: War, loser_side: str) -> None:
     """`loser_side` is 'a' or 'd' — the side whose city was captured."""
     winner = "d" if loser_side == "a" else "a"
-    war[f"exhaustion_{loser_side}"] = min(1.0,
-        war.get(f"exhaustion_{loser_side}", 0.0) + EXH_CITY_LOST)
-    war[f"confidence_{loser_side}"] = max(-0.5,
-        war.get(f"confidence_{loser_side}", 0.5) + CONF_CITY_LOST)
-    war[f"exhaustion_{winner}"] = max(0.0,
-        war.get(f"exhaustion_{winner}", 0.0) + EXH_CITY_TAKEN)
-    war[f"confidence_{winner}"] = min(1.5,
-        war.get(f"confidence_{winner}", 0.5) + CONF_CITY_TAKEN)
+    setattr(war, f"exhaustion_{loser_side}", min(1.0,
+        getattr(war, f"exhaustion_{loser_side}", 0.0) + EXH_CITY_LOST))
+    setattr(war, f"confidence_{loser_side}", max(-0.5,
+        getattr(war, f"confidence_{loser_side}", 0.5) + CONF_CITY_LOST))
+    setattr(war, f"exhaustion_{winner}", max(0.0,
+        getattr(war, f"exhaustion_{winner}", 0.0) + EXH_CITY_TAKEN))
+    setattr(war, f"confidence_{winner}", min(1.5,
+        getattr(war, f"confidence_{winner}", 0.5) + CONF_CITY_TAKEN))
 
 
-def apply_army_broken(war: dict, loser_side: str) -> None:
+def apply_army_broken(war: War, loser_side: str) -> None:
     winner = "d" if loser_side == "a" else "a"
-    war[f"exhaustion_{loser_side}"] = min(1.0,
-        war.get(f"exhaustion_{loser_side}", 0.0) + EXH_ARMY_BROKEN)
-    war[f"confidence_{loser_side}"] = max(-0.5,
-        war.get(f"confidence_{loser_side}", 0.5) + CONF_ARMY_BROKEN)
-    war[f"confidence_{winner}"] = min(1.5,
-        war.get(f"confidence_{winner}", 0.5) + CONF_ENEMY_BROKEN)
+    setattr(war, f"exhaustion_{loser_side}", min(1.0,
+        getattr(war, f"exhaustion_{loser_side}", 0.0) + EXH_ARMY_BROKEN))
+    setattr(war, f"confidence_{loser_side}", max(-0.5,
+        getattr(war, f"confidence_{loser_side}", 0.5) + CONF_ARMY_BROKEN))
+    setattr(war, f"confidence_{winner}", min(1.5,
+        getattr(war, f"confidence_{winner}", 0.5) + CONF_ENEMY_BROKEN))
 
 
-def apply_post_war_baseline(a: dict, b: dict) -> None:
+def apply_post_war_baseline(a: Civ, b: Civ) -> None:
     """Applied when a war is settled — leaves a small lasting grudge."""
     _symmetric_shift(a, b, REL_WAR_PEACE)

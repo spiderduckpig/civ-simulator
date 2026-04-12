@@ -111,15 +111,18 @@ function renderAll() {
     ctx.save();
     ctx.translate(viewOffset.x, viewOffset.y);
     ctx.scale(zoom, zoom);
-    renderFrame(ctx, mapData, gameState, {
-        showRes: chkRes.checked,
-        showLevels: chkLevels.checked,
-        mapMode,
-        tick: gameState.tick,
-        zoom,
-        selectedCity,
-    });
-    ctx.restore();
+    try {
+        renderFrame(ctx, mapData, gameState, {
+            showRes: chkRes.checked,
+            showLevels: chkLevels.checked,
+            mapMode,
+            tick: gameState.tick,
+            zoom,
+            selectedCity,
+        });
+    } finally {
+        ctx.restore();
+    }
 
     // Live-refresh tooltip while hovering
     if (hoveredCell >= 0) {
@@ -142,7 +145,7 @@ function updateUI() {
     // Nation list
     const sorted = [...alive].sort((a, b) => b.territory.length - a.territory.length);
     nationList.innerHTML = sorted.map(civ => {
-        const atWar = wars.some(w => w.a_id === civ.id || w.d_id === civ.id);
+        const atWar = wars.some(w => w.att === civ.id || w.def_id === civ.id);
         const sel   = civ.id === selectedId;
         return `
         <div class="civ-row${sel ? " selected" : ""}" data-id="${civ.id}">
@@ -206,13 +209,13 @@ function updateUI() {
 
 function renderCivDetail(civ, wars) {
     if (!civ) { civDetail.innerHTML = ""; return; }
-    const myWars = wars.filter(w => w.a_id === civ.id || w.d_id === civ.id);
+    const myWars = wars.filter(w => w.att === civ.id || w.def_id === civ.id);
     const warInfo = myWars.length
         ? myWars.map(w => {
-            const eid = w.a_id === civ.id ? w.d_id : w.a_id;
+            const eid = w.att === civ.id ? w.def_id : w.att;
             const en  = gameState.civs.find(c => c.id === eid);
-            const dur = gameState.tick - w.start_tick;
-            return `<div class="detail-war">${en?.name ?? "?"} (${w.a_id === civ.id ? "aggr" : "def"} ${dur}yr)</div>`;
+            const dur = gameState.tick - w.start;
+            return `<div class="detail-war">${en?.name ?? "?"} (${w.att === civ.id ? "aggr" : "def"} ${dur}yr)</div>`;
           }).join("")
         : `<div class="detail-peace">🕊 Peace</div>`;
 
@@ -295,7 +298,7 @@ function renderDiploScreen() {
         return `${lo}|${hi}`;
     };
     const warMap = new Map();
-    for (const w of wars) warMap.set(warKeyOf(w.a_id, w.d_id), w);
+    for (const w of wars) warMap.set(warKeyOf(w.att, w.def_id), w);
 
     // Matrix of relations (symmetric — use the row civ's stored value)
     const headRow = `<tr><th class="row-head"></th>${alive.map(c =>
@@ -339,10 +342,10 @@ function renderDiploScreen() {
 
     // Active wars
     const warCards = wars.length ? wars.map(w => {
-        const att = alive.find(c => c.id === w.a_id);
-        const dfn = alive.find(c => c.id === w.d_id);
+        const att = alive.find(c => c.id === w.att);
+        const dfn = alive.find(c => c.id === w.def_id);
         if (!att || !dfn) return "";
-        const dur = gameState.tick - w.start_tick;
+        const dur = gameState.tick - w.start;
         const confA = w.confidence_a ?? 0.5;
         const confD = w.confidence_d ?? 0.5;
         const exhA  = w.exhaustion_a ?? 0;

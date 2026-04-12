@@ -10,6 +10,7 @@ from .constants import (
 from .helpers import neighbors, is_land, centroid, find_path, war_key, cell_on_river
 from .improvements import make_imp
 from .mapgen import cell_coastal, cell_river_mouth
+from .models import Civ, City
 
 # ── Onomastics loader ─────────────────────────────────────────────────────────
 
@@ -108,24 +109,24 @@ def _next_id() -> int:
 
 # ── Road building (MST toward capital) ───────────────────────────────────────
 
-def build_road(civ: dict, ter: list) -> None:
+def build_road(civ: Civ, ter: list) -> None:
     """Build a road between the highest-priority unconnected city pair.
     Pathfinding bends toward intermediate cities automatically via cost map.
     Existing road cells are free to traverse, so new roads reuse old ones."""
-    if len(civ["cities"]) < 2:
+    if len(civ.cities) < 2:
         return
 
-    city_set = {c["cell"] for c in civ["cities"]}
+    city_set = {c.cell for c in civ.cities}
 
     # Collect all cells that are already paved (existing roads)
     road_cells = set()
-    for r in civ["roads"]:
+    for r in civ.roads:
         road_cells.update(r["path"])
 
     # Build city adjacency from existing roads — a road connects any two
     # cities whose cells appear on its path (not just endpoints)
-    adj: dict = {c["cell"]: set() for c in civ["cities"]}
-    for r in civ["roads"]:
+    adj: dict = {c.cell: set() for c in civ.cities}
+    for r in civ.roads:
         # Find all cities that lie on this road's path
         cities_on_road = [c for c in r["path"] if c in city_set]
         for i in range(len(cities_on_road)):
@@ -137,10 +138,10 @@ def build_road(civ: dict, ter: list) -> None:
     visited = set()
     comp_of = {}  # city_cell -> component_id
     comp_id = 0
-    for c in civ["cities"]:
-        if c["cell"] in visited:
+    for c in civ.cities:
+        if c.cell in visited:
             continue
-        queue = [c["cell"]]
+        queue = [c.cell]
         while queue:
             cur = queue.pop()
             if cur in visited:
@@ -154,13 +155,13 @@ def build_road(civ: dict, ter: list) -> None:
 
     # Score all unconnected city pairs by combined trade potential
     candidates = []
-    tp_map = {c["cell"]: c.get("trade_potential", c["population"] * 0.15 + 4) for c in civ["cities"]}
-    for i, ci in enumerate(civ["cities"]):
-        for cj in civ["cities"][i + 1:]:
-            if comp_of.get(ci["cell"]) == comp_of.get(cj["cell"]):
+    tp_map = {c.cell: c.get("trade_potential", c.population * 0.15 + 4) for c in civ.cities}
+    for i, ci in enumerate(civ.cities):
+        for cj in civ.cities[i + 1:]:
+            if comp_of.get(ci.cell) == comp_of.get(cj.cell):
                 continue
-            score = tp_map[ci["cell"]] + tp_map[cj["cell"]]
-            candidates.append((score, ci["cell"], cj["cell"]))
+            score = tp_map[ci.cell] + tp_map[cj.cell]
+            candidates.append((score, ci.cell, cj.cell))
 
     if not candidates:
         return
@@ -170,21 +171,21 @@ def build_road(civ: dict, ter: list) -> None:
     # the existing network rather than building redundant parallel roads.
     candidates.sort(reverse=True)
     for _, cell_a, cell_b in candidates:
-        path = find_path(cell_a, cell_b, civ["territory"], ter, city_set, road_cells)
+        path = find_path(cell_a, cell_b, civ.territory, ter, city_set, road_cells)
         if path and len(path) < 80:
-            civ["roads"].append({"from": cell_a, "to": cell_b, "path": path})
-            civ["gold"] -= 8
+            civ.roads.append({"from": cell_a, "to": cell_b, "path": path})
+            civ.gold -= 8
             return
 
 
 # ── Spot finding for new civs ─────────────────────────────────────────────────
 
-def find_spot(ter: list, civs: list, rng, rivers: dict = None, om: list = None) -> int:
+def find_spot(ter: list, civs: List[Civ], rng, rivers: dict = None, om: list = None) -> int:
     # Build set of all claimed cells for fast lookup
     claimed = set()
     if om:
         for c in civs:
-            claimed.update(c["territory"])
+            claimed.update(c.territory)
     best = -1
     best_score = -1
     for a in range(600):
@@ -198,7 +199,7 @@ def find_spot(ter: list, civs: list, rng, rivers: dict = None, om: list = None) 
                 continue
             ok = True
             for c in civs:
-                cx, cy = centroid(c["territory"])
+                cx, cy = centroid(c.territory)
                 if abs(cx - x) + abs(cy - y) < 18:
                     ok = False
                     break
@@ -219,9 +220,9 @@ def find_spot(ter: list, civs: list, rng, rivers: dict = None, om: list = None) 
 # ── Civ factory ───────────────────────────────────────────────────────────────
 
 def make_civ(
-    ter: list, alive_civs: list, rivers: dict, rng, tick: int,
+    ter: list, alive_civs: List[Civ], rivers: dict, rng, tick: int,
     om: list = None, impr: list = None,
-) -> Optional[dict]:
+) -> Optional[Civ]:
     spot = find_spot(ter, alive_civs, rng, rivers, om)
     if spot == -1:
         return None
@@ -260,57 +261,58 @@ def make_civ(
     city_name = gen_city_name(onom)
     cid = _next_id()
 
-    return {
-        "id":          cid,
-        "name":        gen_civ_name(onom),
-        "leader":      gen_leader_name(onom),
-        "onom":        onom,
-        "color":       _next_color(),
-        "capital":     spot,
-        "territory":   territory,
-        "cities": [{
-            "cell":           spot,
-            "name":           city_name,
-            "population":     80.0,
-            "is_capital":     True,
-            "founded":        tick,
-            "trade":          10.0,
-            "wealth":         20.0,
-            "focus":          random.choice([FOCUS.FARMING, FOCUS.MINING, FOCUS.DEFENSE]),
-            "near_river":     cell_on_river(spot, rivers),
-            "coastal":        cell_coastal(spot, ter),
-            "food_production": 0.0,
-            "carrying_cap":   200,
-            "tiles":          [],
-            "farm_tiles":     [],
-            # HP / siege state — capitals are tougher
-            "hp":             115.0,
-            "max_hp":         115.0,
-            "last_dmg_tick":  -999,
-        }],
-        "population":     100.0,
-        "military":       20.0,
-        "gold":           50.0,
-        "food":           80.0,
-        "tech":           1.0,
-        "culture":        1.0,
-        "age":            0,
-        "alive":          True,
-        "integrity":      0.6 + random.random() * 0.35,
-        "aggressiveness": 0.2 + random.random() * 0.7,
-        "relations":      {},
-        "allies":         set(),
-        "power":          0.0,
-        "wealth":         30.0,
-        "farm_output":    0.0,
-        "ore_output":     0.0,
-        "stone_output":   0.0,
-        "metal_output":   0.0,
-        "trade_output":   0.0,
-        "expansion_rate": 0.35 + random.random() * 0.4,
-        "events":         [f"Year 0: {city_name} founded"],
-        "parent_name":    None,
-        "roads":          [],
-        "metal_stock":    5.0,           # accumulated metal for fort upkeep
-        "fort_cooldowns": {},            # origin_cell -> tick at which fort can respawn an army
-    }
+    city = City(
+        cell=spot,
+        name=city_name,
+        population=80.0,
+        is_capital=True,
+        founded=tick,
+        trade=10.0,
+        wealth=20.0,
+        focus=random.choice([FOCUS.FARMING, FOCUS.MINING, FOCUS.DEFENSE]),
+        near_river=cell_on_river(spot, rivers),
+        coastal=cell_coastal(spot, ter),
+        food_production=0.0,
+        carrying_cap=200,
+        tiles=[],
+        farm_tiles=[],
+        hp=115.0,
+        max_hp=115.0,
+        last_dmg_tick=-999,
+    )
+
+    return Civ(
+        id=cid,
+        name=gen_civ_name(onom),
+        leader=gen_leader_name(onom),
+        onom=onom,
+        color=_next_color(),
+        capital=spot,
+        territory=territory,
+        cities=[city],
+        population=100.0,
+        military=20.0,
+        gold=50.0,
+        food=80.0,
+        tech=1.0,
+        culture=1.0,
+        age=0,
+        alive=True,
+        integrity=0.6 + random.random() * 0.35,
+        aggressiveness=0.2 + random.random() * 0.7,
+        relations={},
+        allies=set(),
+        power=0.0,
+        wealth=30.0,
+        farm_output=0.0,
+        ore_output=0.0,
+        stone_output=0.0,
+        metal_output=0.0,
+        trade_output=0.0,
+        expansion_rate=0.35 + random.random() * 0.4,
+        events=[f"Year 0: {city_name} founded"],
+        parent_name=None,
+        roads=[],
+        metal_stock=5.0,
+        fort_cooldowns={},
+    )

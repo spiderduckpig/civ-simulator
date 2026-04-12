@@ -168,7 +168,7 @@ CITY_DEFENSE_BONUS     = 0.35      # flat bonus when sitting on a friendly city
 CAPITAL_DEFENSE_BONUS  = 0.25      # additional bonus on top of CITY_DEFENSE_BONUS for capitals
 FRIENDLY_TERRAIN_BONUS = 0.08      # small defensive edge anywhere inside own borders
 
-FORT_METAL_UPKEEP     = 0.45       # per fort level per tick
+FORT_METAL_UPKEEP     = 10.0       # per fort level per tick
 CITY_BASE_HP          = 65.0
 CAPITAL_HP_BONUS      = 50.0
 FORT_HP_BONUS         = 25.0       # per level when a fort sits on the same cell

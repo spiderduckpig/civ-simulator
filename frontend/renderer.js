@@ -139,21 +139,27 @@ function _drawRiverRoad(ctx, seg, riverLw) {
 export function renderFrame(ctx, mapData, state, opts = {}) {
     const { showRes = true, mapMode = "terrain", tick = 0, zoom = 1, selectedCity = null } = opts;
     const { ter, res, rivers, terrain_colors, imp_colors } = mapData;
-    const { civs = [], wars = [], impr = [] } = state;
+    let { civs = [], wars = [], impr = [] } = state;
+
+    // ── Pre-flight data checks ───────────────────────────────────────────────
+    if (!civs || !Array.isArray(civs)) civs = [];
+    if (!wars || !Array.isArray(wars)) wars = [];
+    if (!impr || !Array.isArray(impr)) impr = [];
 
     const civMap = new Map(civs.map(c => [c.id, c]));
 
     // Build war pairs set for fast lookup
     const warPairs = new Set();
     for (const w of wars) {
-        warPairs.add(`${w.a_id}|${w.d_id}`);
-        warPairs.add(`${w.d_id}|${w.a_id}`);
+        if (!w || w.att === undefined || w.def_id === undefined) continue;
+        warPairs.add(`${w.att}|${w.def_id}`);
+        warPairs.add(`${w.def_id}|${w.att}`);
     }
 
     // Build ownership map from civ territories
     const om = new Int32Array(W * H);
     for (const civ of civs) {
-        if (!civ.alive) continue;
+        if (!civ.alive || !civ.territory) continue;
         for (const cell of civ.territory) {
             om[cell] = civ.id;
         }
@@ -352,15 +358,15 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
         const riverLw = zoom > 1.5 ? 2 : 1.3;
 
         for (const civ of civs) {
-            if (!civ.alive) continue;
-            for (const path of civ.road_paths) {
-                if (path.length < 2) continue;
+             if (!civ.alive || !civ.road_paths) continue;
+             for (const path of civ.road_paths) {
+                 if (!path || path.length < 2) continue;
 
-                // Split path into segments: on-river vs off-river
-                let seg = [path[0]];
-                let segOnRiver = riverSet.has(path[0]) && riverSet.has(path[1]);
+                 // Split path into segments: on-river vs off-river
+                 let seg = [path[0]];
+                 let segOnRiver = riverSet.has(path[0]) && riverSet.has(path[1]);
 
-                for (let i = 1; i < path.length; i++) {
+                 for (let i = 1; i < path.length; i++) {
                     const bothOnR = riverSet.has(path[i]) && riverSet.has(path[i - 1]);
 
                     if (bothOnR !== segOnRiver) {
@@ -418,7 +424,7 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
 
     // ── Borders ───────────────────────────────────────────────────────────────
     for (const civ of civs) {
-        if (!civ.alive) continue;
+        if (!civ.alive || !civ.territory) continue;
         const terSet = new Set(civ.territory);
         for (const cell of civ.territory) {
             const x = cell % W, y = (cell / W) | 0;
@@ -505,7 +511,7 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
     // ── Cities ────────────────────────────────────────────────────────────────
     // sqrt(pop) scaling: pop 25 -> sz 2, pop 100 -> sz 3.2, pop 1000 -> sz 6.3, pop 10000 -> sz 10
     for (const civ of civs) {
-        if (!civ.alive) continue;
+        if (!civ.alive || !civ.cities) continue;
         for (const city of civ.cities) {
             const cx = city.cell % W, cy = (city.cell / W) | 0;
             const px = cx * CELL + CELL / 2, py = cy * CELL + CELL / 2;
@@ -551,7 +557,7 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
                 ctx.lineWidth   = 1;
                 ctx.beginPath(); ctx.arc(px, py, sz, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
                 ctx.fillStyle = civ.color;
-                ctx.beginPath(); ctx.arc(px, py, sz - 1, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath(); ctx.arc(px, py, Math.max(0.1, sz - 1), 0, Math.PI * 2); ctx.fill();
             }
 
             if (showLabel) {
@@ -571,7 +577,7 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
 
     // ── Nation name labels ────────────────────────────────────────────────────
     for (const civ of civs) {
-        if (!civ.alive || civ.territory.length < 10) continue;
+        if (!civ.alive || !civ.territory || civ.territory.length < 10) continue;
 
         let minX = W, maxX = 0, minY = H, maxY = 0;
         for (const c of civ.territory) {
@@ -590,7 +596,7 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
         const cx2 = sx / civ.territory.length, cy2 = sy / civ.territory.length;
         const px = cx2 * CELL + CELL / 2, py = cy2 * CELL + CELL / 2;
 
-        const atWar = wars.some(w => w.a_id === civ.id || w.d_id === civ.id);
+        const atWar = wars.some(w => w.att === civ.id || w.def_id === civ.id);
         ctx.font         = `900 ${fs}px Georgia,serif`;
         ctx.textAlign    = "center";
         ctx.textBaseline = "middle";
@@ -613,7 +619,8 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
     // cell render fanned out instead of stacking on top of each other.
     const armiesByCell = new Map();
     for (const w of wars) {
-        const cA = civMap.get(w.a_id), cB = civMap.get(w.d_id);
+        if (!w || w.att === undefined || w.def_id === undefined) continue;
+        const cA = civMap.get(w.att), cB = civMap.get(w.def_id);
         if (!cA || !cB) continue;
         for (const a of (w.armies_a || [])) {
             if (a.strength <= 0) continue;
@@ -630,7 +637,8 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
     }
 
     for (const w of wars) {
-        const cA = civMap.get(w.a_id), cB = civMap.get(w.d_id);
+        if (!w || w.att === undefined || w.def_id === undefined) continue;
+        const cA = civMap.get(w.att), cB = civMap.get(w.def_id);
         if (!cA || !cB) continue;
 
         const allArmies = [
@@ -727,7 +735,7 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
     // hovers above any besieging army icon. Wider and walled to read as a
     // city wall meter, not just another army bar.
     for (const civ of civs) {
-        if (!civ.alive) continue;
+         if (!civ.alive || !civ.cities) continue;
         for (const city of civ.cities) {
             if (city.max_hp <= 0) continue;
             if (city.hp >= city.max_hp - 0.5) continue;  // not damaged
@@ -754,10 +762,6 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
             ctx.fillRect(bx + bw - pipW - 1, by - pipH - 0.5, pipW, pipH);
         }
     }
-
-    // ── Army HP bars (in armyMode, drawn ABOVE icons) are already pushed up
-    // when an army shares a cell with a damaged city: that's enforced by the
-    // city bar living below the cell while the army bar lives above it.
 }
 
 // ── Tooltip hit-test ──────────────────────────────────────────────────────────
@@ -768,8 +772,8 @@ export function getCellInfo(mapData, state, cellIndex) {
 
     const om = new Int32Array(W * H);
     for (const civ of civs) {
-        if (!civ.alive) continue;
-        for (const cell of civ.territory) om[cell] = civ.id;
+         if (!civ.alive || !civ.territory) continue;
+         for (const cell of civ.territory) om[cell] = civ.id;
     }
 
     const oid  = om[cellIndex];

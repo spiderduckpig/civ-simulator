@@ -1,8 +1,26 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Set, List, Dict, Optional, Any
 
+class ModelMeta:
+    """Provides dictionary-like access to dataclasses to ease the transition
+    from dicts to fully typed objects across a large codebase."""
+    def __getitem__(self, item):
+        return getattr(self, item)
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
+    def __contains__(self, item):
+        return hasattr(self, item)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
 @dataclass
-class City:
+class City(ModelMeta):
     cell: int
     name: str
     population: float
@@ -21,29 +39,8 @@ class City:
     max_hp: float = 115.0
     last_dmg_tick: int = -999
 
-    def to_dict(self) -> dict:
-        return {
-            "cell": self.cell,
-            "name": self.name,
-            "population": self.population,
-            "is_capital": self.is_capital,
-            "founded": self.founded,
-            "trade": self.trade,
-            "wealth": self.wealth,
-            "focus": self.focus,
-            "near_river": self.near_river,
-            "coastal": self.coastal,
-            "food_production": self.food_production,
-            "carrying_cap": self.carrying_cap,
-            "tiles": self.tiles,
-            "farm_tiles": self.farm_tiles,
-            "hp": self.hp,
-            "max_hp": self.max_hp,
-            "last_dmg_tick": self.last_dmg_tick,
-        }
-
 @dataclass
-class Civ:
+class Civ(ModelMeta):
     id: int
     name: str
     leader: str
@@ -64,58 +61,52 @@ class Civ:
     aggressiveness: float = 0.5
     relations: Dict[int, float] = field(default_factory=dict)
     allies: Set[int] = field(default_factory=set)
-    power: float = 10.0
+    power: float = 0.0
+    wealth: float = 30.0
+    farm_output: float = 0.0
+    ore_output: float = 0.0
+    stone_output: float = 0.0
+    metal_output: float = 0.0
+    trade_output: float = 0.0
+    expansion_rate: float = 0.5
+    events: List[str] = field(default_factory=list)
+    parent_name: Optional[str] = None
+    roads: List[int] = field(default_factory=list)
+    road_paths: List[List[int]] = field(default_factory=list)
+    metal_stock: float = 5.0
+    fort_cooldowns: Dict[int, int] = field(default_factory=dict)
     _settle_score: float = float("-inf")
     _target_settle_cell: Optional[int] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "name": self.name,
-            "leader": self.leader,
-            "onom": self.onom,
-            "color": self.color,
-            "capital": self.capital,
-            "territory": self.territory,
-            "cities": [c.to_dict() for c in self.cities],
-            "population": self.population,
-            "military": self.military,
-            "gold": self.gold,
-            "food": self.food,
-            "tech": self.tech,
-            "culture": self.culture,
-            "age": self.age,
-            "alive": self.alive,
-            "integrity": self.integrity,
-            "aggressiveness": self.aggressiveness,
-            "relations": self.relations,
-            "allies": self.allies,
-            "power": self.power,
-            "_settle_score": self._settle_score,
-            "_target_settle_cell": self._target_settle_cell,
-        }
+@dataclass
+class Army(ModelMeta):
+    id: int
+    civ_id: int
+    war_key: str
+    cell: int
+    origin_cell: int
+    fort_level: int
+    strength: float
+    max_strength: float
+    organization: float
+    supply: float
+    commander: dict
+    behavior: str
+    objective: dict
+    fortification: float
+    fort_source: str
 
 @dataclass
-class War:
+class War(ModelMeta):
     key: str
     att: int
-    def_: int
+    def_id: int
     start: int
     confidence_a: float
     confidence_d: float
     exhaustion_a: float
     exhaustion_d: float
+    armies_a: List[Army] = field(default_factory=list)
+    armies_d: List[Army] = field(default_factory=list)
     ended: bool = False
 
-    def to_dict(self) -> dict:
-        return {
-            "key": self.key,
-            "att": self.att,
-            "def": self.def_,
-            "start": self.start,
-            "confidence_a": self.confidence_a,
-            "confidence_d": self.confidence_d,
-            "exhaustion_a": self.exhaustion_a,
-            "exhaustion_d": self.exhaustion_d,
-            "ended": self.ended,
-        }

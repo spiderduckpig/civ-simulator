@@ -17,6 +17,7 @@ from .helpers import (
 from .improvements import imp_type, imp_level, downgrade_imp
 from .mapgen import cell_coastal, cell_river_mouth
 from .civ import build_road, gen_city_name
+from .models import City
 
 from . import combat
 from . import city_dev
@@ -64,27 +65,27 @@ def _settle_score(cell, ter, rivers, res, all_city_cells, params):
 
 def _eval_settle_candidate(civ, cell, ter, rivers, res, all_city_cells, params):
     sc = _settle_score(cell, ter, rivers, res, all_city_cells, params)
-    if sc is not None and sc > civ.get("_settle_score", float("-inf")):
-        civ["_settle_candidate"] = cell
-        civ["_settle_score"] = sc
+    if sc is not None and sc > getattr(civ, "_settle_score", float("-inf")):
+        civ._settle_candidate = cell
+        civ._settle_score = sc
 
 
 # ── Peace (restore pre-war borders, keep captured cities) ─────────────────
 
 def _settle_peace(war, a, b, om, civs, tick, add_event):
-    att_id, def_id = war["a_id"], war["d_id"]
-    att  = next((c for c in civs if c["id"] == att_id), None)
-    defn = next((c for c in civs if c["id"] == def_id), None)
+    att_id, def_id = war.att, war.def_id
+    att  = next((c for c in civs if c.id == att_id), None)
+    defn = next((c for c in civs if c.id == def_id), None)
     if not att or not defn:
         return
 
-    pre_a = war.get("pre_ter_a", set())
-    pre_d = war.get("pre_ter_d", set())
-    cap_by_a = set(war.get("captured_cities_a", []))
-    cap_by_d = set(war.get("captured_cities_d", []))
+    pre_a = getattr(war, "pre_ter_a", set())
+    pre_d = getattr(war, "pre_ter_d", set())
+    cap_by_a = set(getattr(war, "captured_cities_a", []))
+    cap_by_d = set(getattr(war, "captured_cities_d", []))
 
-    att_city_cells = [ci["cell"] for ci in att["cities"]]
-    def_city_cells = [ci["cell"] for ci in defn["cities"]]
+    att_city_cells = [ci.cell for ci in att.cities]
+    def_city_cells = [ci.cell for ci in defn.cities]
 
     perm_to_att = set()
     for t in pre_d:
@@ -100,37 +101,37 @@ def _settle_peace(war, a, b, om, civs, tick, add_event):
         if cap_by_d and best_cap_d < best_att_d:
             perm_to_def.add(t)
 
-    disputed = (att["territory"] | defn["territory"]) & (pre_a | pre_d)
+    disputed = (att.territory | defn.territory) & (pre_a | pre_d)
 
     for cell in list(disputed):
         if cell in perm_to_att:
-            defn["territory"].discard(cell)
-            att["territory"].add(cell)
+            defn.territory.discard(cell)
+            att.territory.add(cell)
             om[cell] = att_id
         elif cell in perm_to_def:
-            att["territory"].discard(cell)
-            defn["territory"].add(cell)
+            att.territory.discard(cell)
+            defn.territory.add(cell)
             om[cell] = def_id
         elif cell in pre_a:
-            defn["territory"].discard(cell)
-            att["territory"].add(cell)
+            defn.territory.discard(cell)
+            att.territory.add(cell)
             om[cell] = att_id
         elif cell in pre_d:
-            att["territory"].discard(cell)
-            defn["territory"].add(cell)
+            att.territory.discard(cell)
+            defn.territory.add(cell)
             om[cell] = def_id
 
     # Prune cities that ended up outside their owner's territory
-    att["cities"]  = [c for c in att["cities"]  if c["cell"] in att["territory"]]
-    defn["cities"] = [c for c in defn["cities"] if c["cell"] in defn["territory"]]
+    att.cities  = [c for c in att.cities  if c.cell in att.territory]
+    defn.cities = [c for c in defn.cities if c.cell in defn.territory]
 
     # Peace treaty disbands all armies
-    war["armies_a"] = []
-    war["armies_d"] = []
+    war.armies_a = []
+    war.armies_d = []
 
-    add_event(f"🕊 Year {tick}: {a['name']} & {b['name']} made peace")
-    a["events"].append(f"Year {a['age']}: Peace with {b['name']}")
-    b["events"].append(f"Year {b['age']}: Peace with {a['name']}")
+    add_event(f"🕊 Year {tick}: {a.name} & {b.name} made peace")
+    a.events.append(f"Year {a.age}: Peace with {b.name}")
+    b.events.append(f"Year {b.age}: Peace with {a.name}")
 
 
 # ── Per-tick simulation driver ─────────────────────────────────────────────
@@ -150,12 +151,12 @@ def tick_sim(
     """Run one simulation step. Returns any newly-spawned civs (currently
     always empty — fragmentation is disabled)."""
 
-    alive = [c for c in civs if c["alive"]]
+    alive = [c for c in civs if getattr(c, "alive", True)]
 
     # ── Diplomacy ─────────────────────────────────────────────────────────
     # Cache border cells per civ once — the pair loop is O(C²).
-    border_cache: dict = {c["id"]: border_cells(c["territory"]) for c in alive}
-    civs_by_id: dict = {c["id"]: c for c in alive}
+    border_cache: dict = {c.id: border_cells(c.territory) for c in alive}
+    civs_by_id: dict = {c.id: c for c in alive}
 
     # Drift relations + refresh power snapshots.
     diplomacy.tick_relations(alive, wars, border_cache)
@@ -163,10 +164,10 @@ def tick_sim(
     for i in range(len(alive)):
         for j in range(i + 1, len(alive)):
             a, b = alive[i], alive[j]
-            k = war_key(a["id"], b["id"])
+            k = war_key(a.id, b.id)
             at_war = k in wars
 
-            border = any(bc in b["territory"] for bc in border_cache[a["id"]])
+            border = any(bc in b.territory for bc in border_cache[a.id])
 
             if at_war:
                 war = wars[k]
@@ -193,10 +194,10 @@ def tick_sim(
                     att  = declarer
                     defn = target
                     add_event(
-                        f"⚔ Year {tick}: {att['name']} declared WAR on {defn['name']}!"
+                        f"⚔ Year {tick}: {att.name} declared WAR on {defn.name}!"
                     )
-                    att ["events"].append(f"Year {att ['age']}: War on {defn['name']}")
-                    defn["events"].append(f"Year {defn['age']}: {att['name']} attacked")
+                    att.events.append(f"Year {att.age}: War on {defn.name}")
+                    defn.events.append(f"Year {defn.age}: {att.name} attacked")
                     combat.spawn_war_armies(att,  new_war, "a", impr, k)
                     combat.spawn_war_armies(defn, new_war, "d", impr, k)
                     declared = True
@@ -402,193 +403,201 @@ def tick_sim(
                     continue
                 road_trade += tp_map.get(other_cell, 0) / (1 + road_d * 0.08)
 
-            city["road_trade"] = road_trade
-            city["trade"]      = city["trade_potential"] + road_trade
-            city["wealth"]     = city.get("wealth", 0.0) + city["trade"] * 0.08 + city.pop("_city_gold", 0.0) * 0.02
-            trade_out += city["trade"]
+            city.road_trade = road_trade
+            city.trade      = getattr(city, "trade_potential", 0.0) + road_trade
+            city_gold = getattr(city, "_city_gold", 0.0)
+            if hasattr(city, "_city_gold"):
+                delattr(city, "_city_gold")
+            city.wealth     = getattr(city, "wealth", 0.0) + city.trade * 0.08 + city_gold * 0.02
+            trade_out += city.trade
 
-        civ["farm_output"]  = farm_out
-        civ["ore_output"]   = ore_out
-        civ["stone_output"] = stone_out
-        civ["metal_output"] = metal_out
-        civ["trade_output"] = trade_out
+        civ.farm_output  = farm_out
+        civ.ore_output   = ore_out
+        civ.stone_output = stone_out
+        civ.metal_output = metal_out
+        civ.trade_output = trade_out
 
-        civ["food"]  += farm_out * 0.8 - civ["population"] * 0.015
-        civ["gold"]  += raw_gold * 0.3 + trade_out * 0.015 + len(civ["territory"]) * 0.015
-        civ["wealth"] = max(0, civ["gold"] * 0.3 + trade_out * 0.5 + (ore_out + stone_out + metal_out * 3) * 0.2)
+        civ.food  = getattr(civ, "food", 0.0) + farm_out * 0.8 - getattr(civ, "population", 0.0) * 0.015
+        civ.gold  = getattr(civ, "gold", 0.0) + raw_gold * 0.3 + trade_out * 0.015 + len(getattr(civ, "territory", [])) * 0.015
+        civ.wealth = max(0, civ.gold * 0.3 + trade_out * 0.5 + (ore_out + stone_out + metal_out * 3) * 0.2)
 
         # ── Fort metal upkeep ─────────────────────────────────────────────
-        civ.setdefault("metal_stock", 0.0)
-        civ["metal_stock"] += metal_out * 0.6
+        if not hasattr(civ, "metal_stock"):
+            civ.metal_stock = 0.0
+        civ.metal_stock += metal_out * 0.6
         fort_cells = [
-            c for c in civ["territory"]
+            c for c in civ.territory
             if 0 <= c < N and imp_type(impr[c]) == IMP.FORT
         ]
         total_upkeep = 0.0
         for fc in fort_cells:
             total_upkeep += FORT_METAL_UPKEEP * imp_level(impr[fc])
-        if civ["metal_stock"] >= total_upkeep:
-            civ["metal_stock"] -= total_upkeep
+        if civ.metal_stock >= total_upkeep:
+            civ.metal_stock -= total_upkeep
         else:
-            civ["metal_stock"] = 0.0
+            civ.metal_stock = 0.0
             if fort_cells:
                 fc = random.choice(fort_cells)
                 new_raw = downgrade_imp(impr[fc])
                 if new_raw == IMP.NONE:
                     impr[fc] = IMP.NONE
-                    civ["events"].append(f"Year {civ['age']}: A Fort fell into ruin — no metal")
+                    if not hasattr(civ, "events"):
+                        civ.events = []
+                    civ.events.append(f"Year {civ.age}: A Fort fell into ruin — no metal")
                 else:
                     impr[fc] = new_raw
-                    civ["events"].append(f"Year {civ['age']}: A Fort was downgraded — supply shortage")
-        civ["metal_stock"] = min(civ["metal_stock"], 80.0)
+                    if not hasattr(civ, "events"):
+                        civ.events = []
+                    civ.events.append(f"Year {civ.age}: A Fort was downgraded — supply shortage")
+        civ.metal_stock = min(civ.metal_stock, 80.0)
 
         # ── Logistic population growth ────────────────────────────────────
         GROWTH_RATE = 0.008
-        for city in civ["cities"]:
-            p = city["population"]
-            K = city["carrying_cap"]
+        for city in civ.cities:
+            p = getattr(city, "population", 1.0)
+            K = getattr(city, "carrying_cap", 1.0)
             dp = GROWTH_RATE * p * (K - p) / max(K, 1)
-            city["population"] = p + dp
+            city.population = p + dp
 
         # Abandon cities that drop below viability (capital never abandons)
         surviving_cities = []
-        for i, city in enumerate(civ["cities"]):
-            if i == 0 or city["population"] >= 7:
+        for i, city in enumerate(civ.cities):
+            if i == 0 or getattr(city, "population", 0) >= 7:
                 surviving_cities.append(city)
             else:
-                civ["events"].append(f"Year {civ['age']}: {city['name']} was abandoned due to low population.")
-        civ["cities"] = surviving_cities
+                if not hasattr(civ, "events"):
+                    civ.events = []
+                civ.events.append(f"Year {civ.age}: {city.name} was abandoned due to low population.")
+        civ.cities = surviving_cities
 
-        civ["population"] = sum(c["population"] for c in civ["cities"])
-        civ["tech"]      += 0.007 * math.log2(civ["population"] + 1) * (1 + len(civ["cities"]) * 0.08)
-        civ["culture"]   += 0.004 * math.log2(len(civ["territory"]) + 1)
-        civ["military"]   = max(8.0, civ["population"] * 0.14 + civ["tech"] * 2 + (metal_out * 4.0 + ore_out * 0.5) * 0.1)
-        civ["integrity"]  = min(1.0, max(0.1,
-            civ["integrity"]
-            + civ["culture"] * 0.0002
-            - (0.001  if len(civ["territory"]) > 80 else 0)
-            - (0.0004 if civ["age"] > 100           else 0)
-            + (0.0001 if civ["wealth"] > 100        else 0)
+        civ.population = sum(getattr(c, "population", 0.0) for c in civ.cities)
+        civ.tech      = getattr(civ, "tech", 0.0) + 0.007 * math.log2(civ.population + 1) * (1 + len(civ.cities) * 0.08)
+        civ.culture   = getattr(civ, "culture", 0.0) + 0.004 * math.log2(len(civ.territory) + 1)
+        civ.military  = max(8.0, civ.population * 0.14 + civ.tech * 2 + (metal_out * 4.0 + ore_out * 0.5) * 0.1)
+        civ.integrity = min(1.0, max(0.1,
+            getattr(civ, "integrity", 1.0)
+            + civ.culture * 0.0002
+            - (0.001  if len(civ.territory) > 80 else 0)
+            - (0.0004 if civ.age > 100           else 0)
+            + (0.0001 if civ.wealth > 100        else 0)
         ))
 
         # ── City development (investment, focus HMM, placement) ──────────
         city_dev.tick_city_development(civ, wars, ter, res, rivers, impr, tick, om)
 
         # ── City founding ────────────────────────────────────────────────
-        all_city_cells = [ci["cell"] for other in alive for ci in other["cities"]]
+        all_city_cells = [ci.cell for other in alive for ci in other.cities]
         at_war = any(
-            w["a_id"] == civ["id"] or w["d_id"] == civ["id"]
+            w.att == civ.id or w.def_id == civ.id
             for w in wars.values()
         )
-        largest = max((c["population"] for c in civ["cities"]), default=0)
+        largest = max((c.population for c in civ.cities), default=0)
         should_found = (
             not at_war
-            and len(civ["territory"]) > (len(civ["cities"]) + 1) * 40
+            and len(civ.territory) > (len(civ.cities) + 1) * 40
             and largest > 200
-            and civ["gold"] > 40
-            and len(civ["cities"]) < len(civ["territory"]) // 35 + 1
+            and civ.gold > 40
+            and len(civ.cities) < len(civ.territory) // 35 + 1
         )
-        best_cell = civ.get("_settle_candidate", -1)
-        if should_found and best_cell != -1 and best_cell in civ["territory"]:
+        best_cell = getattr(civ, "_settle_candidate", -1)
+        if should_found and best_cell != -1 and best_cell in civ.territory:
             sc = _settle_score(best_cell, ter, rivers, res, all_city_cells, params)
             if sc is not None and sc > 0:
-                cn = gen_city_name(civ["onom"])
-                new_city = {
-                    "cell":         best_cell,
-                    "name":         cn,
-                    "population":   25.0,
-                    "is_capital":   False,
-                    "founded":      tick,
-                    "trade":        3.0,
-                    "wealth":       3.0,
-                    "focus":        random.choice([
-                        FOCUS.FARMING, FOCUS.MINING, FOCUS.DEFENSE, FOCUS.TRADE,
-                    ]),
-                    "near_river":   cell_on_river(best_cell, rivers),
-                    "coastal":      cell_coastal(best_cell, ter),
-                    "food_production": 0.0,
-                    "carrying_cap":   50,
-                    "tiles":        [],
-                    "farm_tiles":   [],
-                    "last_dmg_tick": -999,
-                }
-                new_city["max_hp"] = combat.city_max_hp(new_city, impr)
-                new_city["hp"]     = new_city["max_hp"]
-                civ["cities"].append(new_city)
-                civ["gold"] -= 20
-                civ["events"].append(f"Year {civ['age']}: Founded {cn}")
-                add_event(f"🏘 Year {tick}: {civ['name']} founded {cn}")
-                civ.pop("_settle_candidate", None)
-                civ.pop("_settle_score", None)
+                cn = gen_city_name(civ.onom)
+                new_city = City(
+                    cell=best_cell,
+                    name=cn,
+                    population=25.0,
+                    is_capital=False,
+                    founded=tick,
+                    trade=3.0,
+                    wealth=3.0,
+                    focus=random.choice([FOCUS.FARMING, FOCUS.MINING, FOCUS.DEFENSE, FOCUS.TRADE]),
+                    near_river=cell_on_river(best_cell, rivers),
+                    coastal=cell_coastal(best_cell, ter),
+                    food_production=0.0,
+                    carrying_cap=50,
+                    tiles=[],
+                    farm_tiles=[],
+                    last_dmg_tick=-999
+                )
+                new_city.max_hp = combat.city_max_hp(new_city, impr)
+                new_city.hp = new_city.max_hp
+                civ.cities.append(new_city)
+                civ.gold -= 20
+                civ.events.append(f"Year {civ.age}: Founded {cn}")
+                add_event(f"🏘 Year {tick}: {civ.name} founded {cn}")
+                if hasattr(civ, "_settle_candidate"): delattr(civ, "_settle_candidate")
+                if hasattr(civ, "_settle_score"): delattr(civ, "_settle_score")
 
         # ── Roads ────────────────────────────────────────────────────────
-        if len(civ["cities"]) >= 2 and civ["gold"] > 12 and tick % 50 == 0:
+        if len(civ.cities) >= 2 and civ.gold > 12 and tick % 50 == 0:
             build_road(civ, ter)
 
         # ── Expansion ────────────────────────────────────────────────────
-        borders = border_cells(civ["territory"])
+        borders = border_cells(civ.territory)
         pocket_targets = [
             c for c in borders
             if 0 <= c < N and is_land(ter, c) and om[c] == 0
-            and sum(1 for n in neighbors(c) if n in civ["territory"]) >= 3
+            and sum(1 for n in neighbors(c) if n in civ.territory) >= 3
         ]
         for c in pocket_targets:
-            civ["territory"].add(c)
-            om[c] = civ["id"]
+            civ.territory.add(c)
+            om[c] = civ.id
             _eval_settle_candidate(civ, c, ter, rivers, res, all_city_cells, params)
 
-        if (civ["food"] > 15
-                and civ["population"] > len(civ["territory"]) * 2
-                and random.random() < civ["expansion_rate"] * 0.6):
-            borders = border_cells(civ["territory"])
+        if (civ.food > 15
+                and civ.population > len(civ.territory) * 2
+                and random.random() < getattr(civ, "expansion_rate", 0.1) * 0.6):
+            borders = border_cells(civ.territory)
             targets = [
                 c for c in borders
                 if 0 <= c < N and is_land(ter, c) and om[c] == 0
             ]
             targets.sort(key=lambda c: (
-                sum(1 for n in neighbors(c) if n in civ["territory"]) * 5
+                sum(1 for n in neighbors(c) if n in civ.territory) * 5
                 + (4 if c in res else 0)
                 + (params["river_pref"] * 0.5 if cell_on_river(c, rivers) else 0)
                 + (2 if ter[c] in (T.PLAINS, T.GRASS) else 0)
                 - (3 if ter[c] >= T.MTN else 0)
                 + random.random() * 3.0
             ), reverse=True)
-            cnt = min(int(len(civ["territory"]) * 0.09) + 1, len(targets), 9)
+            cnt = min(int(len(civ.territory) * 0.09) + 1, len(targets), 9)
             for c in targets[:cnt]:
-                civ["territory"].add(c)
-                om[c] = civ["id"]
+                civ.territory.add(c)
+                om[c] = civ.id
                 _eval_settle_candidate(civ, c, ter, rivers, res, all_city_cells, params)
 
         # ── Housekeeping (no encirclement, no front-line smoothing) ──────
         # Non-contiguous nations are legal. Captured cities keep whatever
         # territory the combat subsystem gave them. We only prune cities
         # whose cell is no longer ours, and restore a capital if needed.
-        civ["cities"] = [c for c in civ["cities"] if c["cell"] in civ["territory"]]
-        civ["roads"]  = [r for r in civ["roads"]  if r["from"] in civ["territory"] and r["to"] in civ["territory"]]
+        civ.cities = [c for c in civ.cities if c.cell in civ.territory]
+        civ.roads  = [r for r in getattr(civ, "roads", []) if r["from"] in civ.territory and r["to"] in civ.territory]
 
-        if civ["cities"] and not any(c["is_capital"] for c in civ["cities"]):
-            civ["cities"][0]["is_capital"] = True
-            civ["capital"] = civ["cities"][0]["cell"]
+        if civ.cities and not any(c.is_capital for c in civ.cities):
+            civ.cities[0].is_capital = True
+            civ.capital = civ.cities[0].cell
 
         civ_at_war = any(
-            w["a_id"] == civ["id"] or w["d_id"] == civ["id"] for w in wars.values()
+            w.att == civ.id or w.def_id == civ.id for w in wars.values()
         )
 
         # Surrender: no cities and at war → absorbed by enemy
-        if not civ["cities"] and civ_at_war:
+        if not civ.cities and civ_at_war:
             for wk, war in list(wars.items()):
-                if war["a_id"] == civ["id"] or war["d_id"] == civ["id"]:
-                    conqueror_id = war["d_id"] if war["a_id"] == civ["id"] else war["a_id"]
-                    conqueror = next((c for c in alive if c["id"] == conqueror_id), None)
+                if war.att == civ.id or war.def_id == civ.id:
+                    conqueror_id = war.def_id if war.att == civ.id else war.att
+                    conqueror = next((c for c in alive if c.id == conqueror_id), None)
                     if conqueror:
-                        for c in list(civ["territory"]):
-                            civ["territory"].discard(c)
-                            conqueror["territory"].add(c)
+                        for c in list(civ.territory):
+                            civ.territory.discard(c)
+                            conqueror.territory.add(c)
                             om[c] = conqueror_id
-                        civ["alive"] = False
+                        civ.alive = False
                         diplomacy.break_alliances_with(civ, civs_by_id)
-                        add_event(f"🏳 Year {tick}: {civ['name']} surrendered to {conqueror['name']}!")
-                        civ["events"].append(f"Year {civ['age']}: Surrendered to {conqueror['name']}")
+                        add_event(f"🏳 Year {tick}: {civ.name} surrendered to {conqueror.name}!")
+                        civ.events.append(f"Year {civ.age}: Surrendered to {conqueror.name}")
                         conqueror["events"].append(f"Year {conqueror['age']}: Conquered {civ['name']}")
                     wars.pop(wk, None)
                     break

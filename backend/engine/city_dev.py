@@ -16,6 +16,7 @@ from .improvements import (
     best_improvement, advanced_structure_for,
 )
 from .helpers import neighbors
+from .models import City, Civ
 
 
 # Terrain types a fort is allowed to sit on.
@@ -27,18 +28,18 @@ REBUILD_CHANCE = 0.004
 
 # ── Upgrade cost (scale-free fraction of city wealth) ──────────────────────
 
-def _upgrade_cost(city: dict, current_level: int) -> float:
+def _upgrade_cost(city: City, current_level: int) -> float:
     # Fraction of city wealth, not a flat gold cost — stays scale-free.
-    base_wealth = max(city.get("wealth", 0.0), INVEST_MIN_WEALTH_FLOOR)
+    base_wealth = max(city.wealth, INVEST_MIN_WEALTH_FLOOR)
     level_mult = max(1.0, current_level) ** INVEST_COST_LEVEL_POW
     return base_wealth * INVEST_COST_BASE_FRAC * level_mult
 
 
-def _try_debit(city: dict, cost: float) -> bool:
+def _try_debit(city: City, cost: float) -> bool:
     if cost <= 0:
         return True
-    if city.get("wealth", 0.0) >= cost:
-        city["wealth"] -= cost
+    if city.wealth >= cost:
+        city.wealth -= cost
         return True
     return False
 
@@ -46,10 +47,10 @@ def _try_debit(city: dict, cost: float) -> bool:
 # ── Tile picking heuristics ────────────────────────────────────────────────
 
 def _pick_upgrade_candidate(
-    city: dict, impr: list, *, preferred_types: set,
+    city: City, impr: list, *, preferred_types: set,
 ) -> Optional[int]:
     # Lowest-level upgradable tile, preferring the focus's types.
-    tiles = city.get("tiles", [])
+    tiles = city.tiles
     if not tiles:
         return None
 
@@ -98,15 +99,15 @@ def _focus_preferred_types(focus: int) -> set:
 # ── Focus HMM transitions ──────────────────────────────────────────────────
 
 def _focus_transition(
-    city: dict, civ_is_at_war: bool, *, rand: Callable[[], float] = random.random,
+    city: City, civ_is_at_war: bool, *, rand: Callable[[], float] = random.random,
 ) -> None:
-    f = city.get("focus", FOCUS.FARMING)
-    pop = max(1.0, city.get("population", 1.0))
-    food = city.get("food_production", 0.0)
-    ore  = city.get("city_ore", 0.0)
-    stone = city.get("city_stone", 0.0)
-    trade = city.get("trade_potential", 0.0)
-    coastal = city.get("coastal", False)
+    f = city.focus
+    pop = max(1.0, city.population)
+    food = city.food_production
+    ore  = getattr(city, "city_ore", 0.0)
+    stone = getattr(city, "city_stone", 0.0)
+    trade = getattr(city, "trade_potential", 0.0)
+    coastal = city.coastal
 
     # Scale-free evidence signals (all fractions of population, not raw numbers)
     food_deficit = food < pop * 0.3
@@ -154,14 +155,14 @@ def _focus_transition(
     for tgt, w in weights.items():
         acc += w
         if pick <= acc:
-            city["focus"] = tgt
+            city.focus = tgt
             return
 
 
 # ── Advanced structure / new-improvement placement ─────────────────────────
 
 def _place_new_improvement(
-    city: dict, ter: list, res: dict, rivers: dict, impr: list,
+    city: City, ter: list, res: dict, rivers: dict, impr: list,
     *, rand: Callable[[], float] = random.random,
 ) -> bool:
     """Try to place a new improvement on one of the city's empty tiles.
@@ -169,7 +170,7 @@ def _place_new_improvement(
     Uses ``best_improvement`` (focus-aware, HMM-style) for the pick. Returns
     True if an improvement was built (and paid for), False otherwise.
     """
-    tiles = city.get("tiles", [])
+    tiles = city.tiles
     if not tiles:
         return False
 
@@ -179,14 +180,14 @@ def _place_new_improvement(
         return False
     random.shuffle(empties)
 
-    focus = city.get("focus", FOCUS.FARMING)
+    focus = city.focus
     for cell in empties[:8]:
         pick = best_improvement(ter, res, cell, rivers, focus, rand=rand)
         if pick == IMP.NONE:
             continue
         # Cost: one-level-1 build is a small fraction of city wealth
         cost = max(INVEST_MIN_WEALTH_FLOOR * 0.6,
-                   city.get("wealth", 0.0) * INVEST_COST_BASE_FRAC * 0.5)
+                   city.wealth * INVEST_COST_BASE_FRAC * 0.5)
         if not _try_debit(city, cost):
             return False
         impr[cell] = make_imp(pick, 1)
@@ -195,7 +196,7 @@ def _place_new_improvement(
 
 
 def _place_advanced_structure(
-    city: dict, ter: list, impr: list,
+    city: City, ter: list, impr: list,
     *, rand: Callable[[], float] = random.random,
 ) -> bool:
     """Try to place an advanced structure (port / fishery / windmill /
@@ -204,7 +205,7 @@ def _place_advanced_structure(
     Adjacent structures get more benefit to the city by being near existing
     improvements. Costs are scaled vs. city wealth, same as upgrades.
     """
-    tiles = city.get("tiles", [])
+    tiles = city.tiles
     if not tiles:
         return False
 
@@ -213,13 +214,13 @@ def _place_advanced_structure(
         return False
     random.shuffle(empties)
 
-    focus = city.get("focus", FOCUS.FARMING)
+    focus = city.focus
     for cell in empties[:12]:
         pick = advanced_structure_for(cell, ter, impr, focus, rand=rand)
         if pick == IMP.NONE:
             continue
         cost = max(INVEST_MIN_WEALTH_FLOOR,
-                   city.get("wealth", 0.0) * INVEST_COST_BASE_FRAC * 0.8)
+                   city.wealth * INVEST_COST_BASE_FRAC * 0.8)
         if not _try_debit(city, cost):
             return False
         impr[cell] = make_imp(pick, 1)
@@ -230,7 +231,7 @@ def _place_advanced_structure(
 # ── Fort placement (border-biased) ─────────────────────────────────────────
 
 def _place_fort(
-    city: dict, civ: dict, ter: list, impr: list, territory_set: set,
+    city: City, civ: Civ, ter: list, impr: list, territory_set: set,
     enemy_ids: set, om: list,
 ) -> bool:
     """Try to place a new IMP.FORT on one of the city's walkable empty tiles.
@@ -238,7 +239,7 @@ def _place_fort(
     Prefers tiles closest to an enemy border. Returns True on success.
     Gated by the caller — this function assumes the civ wants a fort.
     """
-    tiles = city.get("tiles", [])
+    tiles = city.tiles
     if not tiles:
         return False
 
@@ -282,7 +283,7 @@ def _place_fort(
     empties.sort(key=border_score)
     # Cheap-ish: forts are strategic so they cost a bit more than a farm.
     cost = max(INVEST_MIN_WEALTH_FLOOR * 1.2,
-               city.get("wealth", 0.0) * INVEST_COST_BASE_FRAC * 1.0)
+               city.wealth * INVEST_COST_BASE_FRAC * 1.0)
     if not _try_debit(city, cost):
         return False
 
@@ -293,7 +294,7 @@ def _place_fort(
 # ── Rare: rebuild a different improvement on an occupied tile ──────────────
 
 def _rebuild_improvement(
-    city: dict, ter: list, res: dict, rivers: dict, impr: list,
+    city: City, ter: list, res: dict, rivers: dict, impr: list,
     *, rand: Callable[[], float] = random.random,
 ) -> bool:
     """Replace one existing improvement in this city with a freshly-picked
@@ -301,11 +302,11 @@ def _rebuild_improvement(
 
     Prefers tiles whose current type doesn't match the city's focus.
     """
-    tiles = city.get("tiles", [])
+    tiles = city.tiles
     if not tiles:
         return False
 
-    focus = city.get("focus", FOCUS.FARMING)
+    focus = city.focus
     pref  = _focus_preferred_types(focus)
 
     # Candidates: occupied tiles whose current improvement is NOT in the
@@ -332,7 +333,7 @@ def _rebuild_improvement(
             continue
         # Rebuild is expensive: roughly 3× a normal placement.
         cost = max(INVEST_MIN_WEALTH_FLOOR * 2.0,
-                   city.get("wealth", 0.0) * INVEST_COST_BASE_FRAC * 2.5)
+                   city.wealth * INVEST_COST_BASE_FRAC * 2.5)
         if not _try_debit(city, cost):
             return False
         impr[cell] = make_imp(pick, 1)
@@ -343,7 +344,7 @@ def _rebuild_improvement(
 # ── Public entry: per-civ per-tick city development ───────────────────────
 
 def tick_city_development(
-    civ: dict, wars: dict, ter: list, res: dict, rivers: dict, impr: list,
+    civ: Civ, wars: dict, ter: list, res: dict, rivers: dict, impr: list,
     tick: int, om: list | None = None,
 ) -> None:
     """Update one civ's cities: focus HMM, investment, placement.
@@ -354,16 +355,16 @@ def tick_city_development(
     ``city_ore``, ``city_stone``, ``trade_potential``, ``population``,
     ``coastal``.
     """
-    if not civ.get("cities"):
+    if not civ.cities:
         return
 
     civ_is_at_war = any(
-        w["a_id"] == civ["id"] or w["d_id"] == civ["id"] for w in wars.values()
+        w.att == civ.id or w.def_id == civ.id for w in wars.values()
     )
 
     # ── Focus transitions (infrequent) ───────────────────────────────────
     if tick % FOCUS_HMM_PERIOD == 0:
-        for city in civ["cities"]:
+        for city in civ.cities:
             _focus_transition(city, civ_is_at_war)
 
     # ── Investment loop (per-city budget) ────────────────────────────────
@@ -371,13 +372,13 @@ def tick_city_development(
         return
 
     # Precompute fort-placement context once per civ per tick.
-    territory_set = set(civ.get("territory", []))
+    territory_set = set(civ.territory)
     enemy_ids: set = set()
     for w in wars.values():
-        if w["a_id"] == civ["id"]:
-            enemy_ids.add(w["d_id"])
-        elif w["d_id"] == civ["id"]:
-            enemy_ids.add(w["a_id"])
+        if w.att == civ.id:
+            enemy_ids.add(w.def_id)
+        elif w.def_id == civ.id:
+            enemy_ids.add(w.att)
 
     # Does the civ already have any fort in its territory? (for the "always
     # at least one" guarantee when the starter fort has fallen into ruin.)
@@ -387,8 +388,8 @@ def tick_city_development(
         if 0 <= c < N
     )
 
-    for city in civ["cities"]:
-        focus = city.get("focus", FOCUS.FARMING)
+    for city in civ.cities:
+        focus = city.focus
         pref = _focus_preferred_types(focus)
         upgrades_done = 0
         # Each city gets up to INVEST_MAX_PER_TICK upgrade attempts per tick.
@@ -419,7 +420,7 @@ def tick_city_development(
         )
         if want_fort and om is not None:
             # Roughly cap fort density: one fort per ~4 worked tiles in this city.
-            city_tiles = city.get("tiles", [])
+            city_tiles = city.tiles
             fort_here = sum(
                 1 for t in city_tiles
                 if 0 <= t < N and imp_type(impr[t]) == IMP.FORT

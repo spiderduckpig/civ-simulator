@@ -173,9 +173,9 @@ def _ser_state(state: GameState) -> dict:
         "civs":  _ser_civs(state.civs),
         "wars":  [{
             "key":         k,
-            "a_id":        v["a_id"],
-            "d_id":        v["d_id"],
-            "start_tick":  v["start_tick"],
+            "att":         v["att"],
+            "def_id":      v["def_id"],
+            "start_tick":  v["start"],
             "confidence_a": round(v.get("confidence_a", 0.5), 3),
             "confidence_d": round(v.get("confidence_d", 0.5), 3),
             "exhaustion_a": round(v.get("exhaustion_a", 0.0), 3),
