@@ -467,6 +467,7 @@ function showTooltip(x, y, info) {
         info.river   ? `<div style="color:#4aaef0">〰 River</div>` : "",
         info.coastal ? `<div style="color:#1a6a9e">⚓ Coastal</div>` : "",
         info.imp.name !== "—" ? `<div style="color:#c8a000">${info.imp.name} Lv.${info.imp.level}${info.imp.detail ? ` — ${info.imp.detail}` : ""}</div>` : "",
+        info.imp.employees ? `<div style="color:#9a8fb8">${info.imp.employees}</div>` : "",
         info.res   ? `<div>${info.res}</div>` : "",
         info.civ   ? `<div style="color:${info.civ.color};font-weight:600">${info.civ.name}</div>` : "",
     ];
@@ -503,7 +504,7 @@ function showTooltip(x, y, info) {
             const fValue = c.focus | 0;
 
             lines.push(`<div style="color:#8b949e">Focus: <span style="color:${focusColor[fValue]}">${focusEmoji[fValue]} ${focusMap[fValue]}</span></div>`);
-            lines.push(`<div style="color:#8b949e">⚙ Ore ${c.city_ore} · 🧱 Stone ${c.city_stone} · 🗡 Metal ${c.city_metal}</div>`);
+            lines.push(`<div style="color:#8b949e">⚙ Ore ${c.city_ore}/${c.city_ore_total} · 🧱 Stone ${c.city_stone}/${c.city_stone_total} · 🗡 Metal ${c.city_metal}/${c.city_metal_total}</div>`);
 
             lines.push(`<div style="color:#8b949e">📐 ${s.tileCount} tiles · 💎 ${s.resCount} resources</div>`);
             if (imps.length) {

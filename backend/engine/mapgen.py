@@ -4,6 +4,7 @@ import random as _random
 from .constants import W, H, N, T, RES_LIST, IMP
 from .noise import make_noise, fbm
 from .helpers import neighbors, is_land
+from .models import Rivers, MapData
 
 
 # ── River generation ─────────────────────────────────────────────────────────
@@ -18,7 +19,7 @@ def _source_too_close(cell: int, sources: list, min_dist: int) -> bool:
     return False
 
 
-def gen_rivers(hm: list, ter: list, seed: int) -> dict:
+def gen_rivers(hm: list, ter: list, seed: int) -> Rivers:
     """
     Generate rivers with erosion simulation.
 
@@ -126,7 +127,7 @@ def gen_rivers(hm: list, ter: list, seed: int) -> dict:
     for p in all_paths:
         cell_river.update(p)
 
-    return {"paths": all_paths, "cell_river": cell_river}
+    return Rivers(paths=all_paths, cell_river=cell_river)
 
 def cell_coastal(cell: int, ter: list) -> bool:
     for n in neighbors(cell):
@@ -135,9 +136,9 @@ def cell_coastal(cell: int, ter: list) -> bool:
     return False
 
 
-def cell_river_mouth(cell: int, ter: list, rivers: dict) -> bool:
+def cell_river_mouth(cell: int, ter: list, rivers: Rivers) -> bool:
     """A river mouth is a land cell on a river adjacent to ocean/coast."""
-    if cell not in rivers["cell_river"]:
+    if cell not in rivers.cell_river:
         return False
     if ter[cell] <= T.COAST:
         return False
@@ -149,7 +150,7 @@ def cell_river_mouth(cell: int, ter: list, rivers: dict) -> bool:
 
 # ── Map generation ────────────────────────────────────────────────────────────
 
-def gen_map(seed: int) -> dict:
+def gen_map(seed: int) -> MapData:
     n1 = make_noise(seed)
     n2 = make_noise(seed + 1000)
     n3 = make_noise(seed + 2000)
@@ -241,12 +242,12 @@ def gen_map(seed: int) -> dict:
     rivers = gen_rivers(hm, ter, seed)
     impr   = [IMP.NONE] * N
 
-    return {
-        "hm":     hm,
-        "mm":     mm,
-        "tm":     tm,
-        "ter":    ter,
-        "res":    res,
-        "rivers": rivers,
-        "impr":   impr,
-    }
+    return MapData(
+        hm=hm,
+        mm=mm,
+        tm=tm,
+        ter=ter,
+        res=res,
+        rivers=rivers,
+        impr=impr,
+    )

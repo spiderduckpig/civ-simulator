@@ -10,7 +10,7 @@ from .constants import (
 from .helpers import neighbors, is_land, centroid, find_path, war_key, cell_on_river
 from .improvements import make_imp
 from .mapgen import cell_coastal, cell_river_mouth
-from .models import Civ, City
+from .models import Civ, City, Road, Rivers
 
 # ── Onomastics loader ─────────────────────────────────────────────────────────
 
@@ -121,14 +121,14 @@ def build_road(civ: Civ, ter: list) -> None:
     # Collect all cells that are already paved (existing roads)
     road_cells = set()
     for r in civ.roads:
-        road_cells.update(r["path"])
+        road_cells.update(r.path)
 
     # Build city adjacency from existing roads — a road connects any two
     # cities whose cells appear on its path (not just endpoints)
     adj: dict = {c.cell: set() for c in civ.cities}
     for r in civ.roads:
         # Find all cities that lie on this road's path
-        cities_on_road = [c for c in r["path"] if c in city_set]
+        cities_on_road = [c for c in r.path if c in city_set]
         for i in range(len(cities_on_road)):
             for j in range(i + 1, len(cities_on_road)):
                 adj[cities_on_road[i]].add(cities_on_road[j])
@@ -155,7 +155,7 @@ def build_road(civ: Civ, ter: list) -> None:
 
     # Score all unconnected city pairs by combined trade potential
     candidates = []
-    tp_map = {c.cell: c.get("trade_potential", c.population * 0.15 + 4) for c in civ.cities}
+    tp_map = {c.cell: (c.trade_potential or (c.population * 0.15 + 4)) for c in civ.cities}
     for i, ci in enumerate(civ.cities):
         for cj in civ.cities[i + 1:]:
             if comp_of.get(ci.cell) == comp_of.get(cj.cell):
@@ -173,14 +173,14 @@ def build_road(civ: Civ, ter: list) -> None:
     for _, cell_a, cell_b in candidates:
         path = find_path(cell_a, cell_b, civ.territory, ter, city_set, road_cells)
         if path and len(path) < 80:
-            civ.roads.append({"from": cell_a, "to": cell_b, "path": path})
+            civ.roads.append(Road(from_cell=cell_a, to_cell=cell_b, path=path))
             civ.gold -= 8
             return
 
 
 # ── Spot finding for new civs ─────────────────────────────────────────────────
 
-def find_spot(ter: list, civs: List[Civ], rng, rivers: dict = None, om: list = None) -> int:
+def find_spot(ter: list, civs: List[Civ], rng, rivers: Optional[Rivers] = None, om: Optional[list] = None) -> int:
     # Build set of all claimed cells for fast lookup
     claimed = set()
     if om:
@@ -220,8 +220,8 @@ def find_spot(ter: list, civs: List[Civ], rng, rivers: dict = None, om: list = N
 # ── Civ factory ───────────────────────────────────────────────────────────────
 
 def make_civ(
-    ter: list, alive_civs: List[Civ], rivers: dict, rng, tick: int,
-    om: list = None, impr: list = None,
+    ter: list, alive_civs: List[Civ], rivers: Rivers, rng, tick: int,
+    om: Optional[list] = None, impr: Optional[list] = None,
 ) -> Optional[Civ]:
     spot = find_spot(ter, alive_civs, rng, rivers, om)
     if spot == -1:
@@ -237,25 +237,7 @@ def make_civ(
             if is_land(ter, ni):
                 territory.add(ni)
 
-    # Plant a starter fort on an empty land cell next to the capital so
-    # every civ has somewhere to rally and spawn armies. Walkable tiles
-    # (plains/grass/forest/hills) only — no mountain-top forts.
-    if impr is not None:
-        walkable_starts = (T.PLAINS, T.GRASS, T.FOREST, T.HILLS)
-        fort_placed = False
-        # Prefer an adjacent cell first; fall back to any territory cell.
-        for n in neighbors(spot):
-            if (0 <= n < N and n in territory
-                    and ter[n] in walkable_starts and impr[n] == IMP.NONE):
-                impr[n] = make_imp(IMP.FORT, 1)
-                fort_placed = True
-                break
-        if not fort_placed:
-            for cell in territory:
-                if (cell != spot and ter[cell] in walkable_starts
-                        and impr[cell] == IMP.NONE):
-                    impr[cell] = make_imp(IMP.FORT, 1)
-                    break
+    # We got rid of the starter fort logic for now.
 
     onom = _pick(ALL_ONOMASTICS)
     city_name = gen_city_name(onom)

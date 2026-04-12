@@ -18,7 +18,7 @@ All thresholds are scale-invariant (fractions / ratios of power).
 from __future__ import annotations
 
 import random
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Set
 
 from .helpers import war_key
 from .models import Civ, War
@@ -53,17 +53,8 @@ MORALE_PEACE_THRESHOLD = -0.18
 
 # ── Setup / ticking ──────────────────────────────────────────────────
 
-def ensure_civ_diplo(civ: Civ, all_civs: list) -> None:
+def ensure_civ_diplo(civ: Civ, all_civs: List[Civ]) -> None:
     """Initialise / backfill diplomacy fields on a civ."""
-    if not hasattr(civ, "relations"):
-        civ.relations = {}
-    if not hasattr(civ, "allies"):
-        civ.allies = set()
-    # Migrate legacy peacefulness -> aggressiveness if needed
-    if not hasattr(civ, "aggressiveness"):
-        civ.aggressiveness = 1.0 - getattr(civ, "peacefulness", 0.5)
-    if not hasattr(civ, "power"):
-        civ.power = 0.0
     for other in all_civs:
         if other.id == civ.id:
             continue
@@ -73,21 +64,21 @@ def ensure_civ_diplo(civ: Civ, all_civs: list) -> None:
 def compute_power(civ: Civ) -> float:
     """Scale-invariant power score. Higher = stronger bloc."""
     return (
-        getattr(civ, "military", 0.0) * 1.0
-        + getattr(civ, "tech", 1.0) * 4.0
-        + len(getattr(civ, "territory", [])) * 0.5
-        + getattr(civ, "wealth", 0.0) * 0.15
-        + len(getattr(civ, "cities", [])) * 6.0
+        civ.military * 1.0
+        + civ.tech * 4.0
+        + len(civ.territory) * 0.5
+        + civ.wealth * 0.15
+        + len(civ.cities) * 6.0
     )
 
 
-def bloc_power(civ: Civ, civs_by_id: dict) -> float:
+def bloc_power(civ: Civ, civs_by_id: Dict[int, Civ]) -> float:
     """Civ power + power of every living ally."""
-    total = getattr(civ, "power", 0.0)
-    for aid in getattr(civ, "allies", set()):
+    total = civ.power
+    for aid in civ.allies:
         ally = civs_by_id.get(aid)
-        if ally and getattr(ally, "alive", False):
-            total += getattr(ally, "power", 0.0)
+        if ally and ally.alive:
+            total += ally.power
     return total
 
 
@@ -100,7 +91,7 @@ def _symmetric_shift(a: Civ, b: Civ, delta: float) -> None:
     b.relations[a.id] = _clamp(b.relations.get(a.id, 0.0) + delta)
 
 
-def tick_relations(alive: list, wars: dict, border_cache: dict) -> None:
+def tick_relations(alive: List[Civ], wars: Dict[str, War], border_cache: Dict[int, Set[int]]) -> None:
     """Drift relations every tick based on borders and war state, and
     refresh each civ's cached power snapshot."""
     for civ in alive:
@@ -126,11 +117,11 @@ def tick_relations(alive: list, wars: dict, border_cache: dict) -> None:
 # ── War declaration ──────────────────────────────────────────────────
 
 def consider_war_declaration(
-    a: Civ, b: Civ, wars: dict, civs_by_id: dict, tick: int,
+    a: Civ, b: Civ, wars: Dict[str, War], civs_by_id: Dict[int, Civ], tick: int,
     k: str, border: bool,
 ) -> Optional[War]:
     """Return a new war dict if `a` should declare war on `b`, else None."""
-    if not border or k in wars or b.id in getattr(a, "allies", set()):
+    if not border or k in wars or b.id in a.allies:
         return None
 
     # Count active wars this civ is already in.
@@ -140,12 +131,12 @@ def consider_war_declaration(
     )
 
     # Only the most aggressive civs will even consider a second front.
-    if existing_wars >= 1 and getattr(a, "aggressiveness", 0.5) < 0.75:
+    if existing_wars >= 1 and a.aggressiveness < 0.75:
         return None
 
     rel = a.relations.get(b.id, 0.0)
     # Aggressiveness lets a civ shrug off worse relations before refusing war.
-    hostility = (REL_WAR_TOLERANCE - rel) * getattr(a, "aggressiveness", 0.5)
+    hostility = (REL_WAR_TOLERANCE - rel) * a.aggressiveness
     if hostility <= 0:
         return None
 
@@ -184,11 +175,11 @@ def consider_war_declaration(
 # ── Alliance formation ───────────────────────────────────────────────
 
 def consider_alliance(
-    a: Civ, b: Civ, wars: dict, civs_by_id: dict,
+    a: Civ, b: Civ, wars: Dict[str, War], civs_by_id: Dict[int, Civ],
 ) -> bool:
     """Pair-wise alliance check. Both sides must like each other above
     REL_ALLIANCE_THRESHOLD, and neither can be at war with the other."""
-    if b.id in getattr(a, "allies", set()):
+    if b.id in a.allies:
         return False
     if war_key(a.id, b.id) in wars:
         return False
@@ -220,21 +211,17 @@ def consider_alliance(
 
 
 def form_alliance(a: Civ, b: Civ) -> None:
-    if not hasattr(a, "allies"):
-        a.allies = set()
     a.allies.add(b.id)
-    if not hasattr(b, "allies"):
-        b.allies = set()
     b.allies.add(a.id)
     _symmetric_shift(a, b, REL_ALLIANCE_BONUS)
 
 
-def break_alliances_with(civ: Civ, civs_by_id: dict) -> None:
+def break_alliances_with(civ: Civ, civs_by_id: Dict[int, Civ]) -> None:
     """Called when `civ` dies — remove it from every ally's set."""
-    for aid in list(getattr(civ, "allies", set())):
+    for aid in list(civ.allies):
         ally = civs_by_id.get(aid)
         if ally:
-            getattr(ally, "allies", set()).discard(civ.id)
+            ally.allies.discard(civ.id)
     civ.allies = set()
 
 
@@ -242,43 +229,44 @@ def break_alliances_with(civ: Civ, civs_by_id: dict) -> None:
 
 def tick_war_morale(war: War) -> None:
     """Per-tick baseline drift. Confidence slowly equilibrates to 0.5."""
-    war.exhaustion_a = min(1.0, getattr(war, "exhaustion_a", 0.0) + EXH_DRIFT_PER_TICK)
-    war.exhaustion_d = min(1.0, getattr(war, "exhaustion_d", 0.0) + EXH_DRIFT_PER_TICK)
-    for side in ("a", "d"):
-        key = f"confidence_{side}"
-        v = getattr(war, key, 0.5)
-        setattr(war, key, v + (0.5 - v) * 0.002)
+    war.exhaustion_a = min(1.0, war.exhaustion_a + EXH_DRIFT_PER_TICK)
+    war.exhaustion_d = min(1.0, war.exhaustion_d + EXH_DRIFT_PER_TICK)
+    
+    war.confidence_a += (0.5 - war.confidence_a) * 0.002
+    war.confidence_d += (0.5 - war.confidence_d) * 0.002
 
 
 def should_sue_for_peace(war: War) -> bool:
     """Either side breaking ends the war: the winner wins peace, the
     loser needs it."""
-    score_a = getattr(war, "confidence_a", 0.5) - getattr(war, "exhaustion_a", 0.0)
-    score_d = getattr(war, "confidence_d", 0.5) - getattr(war, "exhaustion_d", 0.0)
+    score_a = war.confidence_a - war.exhaustion_a
+    score_d = war.confidence_d - war.exhaustion_d
     return score_a < MORALE_PEACE_THRESHOLD or score_d < MORALE_PEACE_THRESHOLD
 
 
 def apply_city_lost(war: War, loser_side: str) -> None:
     """`loser_side` is 'a' or 'd' — the side whose city was captured."""
-    winner = "d" if loser_side == "a" else "a"
-    setattr(war, f"exhaustion_{loser_side}", min(1.0,
-        getattr(war, f"exhaustion_{loser_side}", 0.0) + EXH_CITY_LOST))
-    setattr(war, f"confidence_{loser_side}", max(-0.5,
-        getattr(war, f"confidence_{loser_side}", 0.5) + CONF_CITY_LOST))
-    setattr(war, f"exhaustion_{winner}", max(0.0,
-        getattr(war, f"exhaustion_{winner}", 0.0) + EXH_CITY_TAKEN))
-    setattr(war, f"confidence_{winner}", min(1.5,
-        getattr(war, f"confidence_{winner}", 0.5) + CONF_CITY_TAKEN))
+    if loser_side == "a":
+        war.exhaustion_a = min(1.0, war.exhaustion_a + EXH_CITY_LOST)
+        war.confidence_a = max(-0.5, war.confidence_a + CONF_CITY_LOST)
+        war.exhaustion_d = max(0.0, war.exhaustion_d + EXH_CITY_TAKEN)
+        war.confidence_d = min(1.5, war.confidence_d + CONF_CITY_TAKEN)
+    else:
+        war.exhaustion_d = min(1.0, war.exhaustion_d + EXH_CITY_LOST)
+        war.confidence_d = max(-0.5, war.confidence_d + CONF_CITY_LOST)
+        war.exhaustion_a = max(0.0, war.exhaustion_a + EXH_CITY_TAKEN)
+        war.confidence_a = min(1.5, war.confidence_a + CONF_CITY_TAKEN)
 
 
 def apply_army_broken(war: War, loser_side: str) -> None:
-    winner = "d" if loser_side == "a" else "a"
-    setattr(war, f"exhaustion_{loser_side}", min(1.0,
-        getattr(war, f"exhaustion_{loser_side}", 0.0) + EXH_ARMY_BROKEN))
-    setattr(war, f"confidence_{loser_side}", max(-0.5,
-        getattr(war, f"confidence_{loser_side}", 0.5) + CONF_ARMY_BROKEN))
-    setattr(war, f"confidence_{winner}", min(1.5,
-        getattr(war, f"confidence_{winner}", 0.5) + CONF_ENEMY_BROKEN))
+    if loser_side == "a":
+        war.exhaustion_a = min(1.0, war.exhaustion_a + EXH_ARMY_BROKEN)
+        war.confidence_a = max(-0.5, war.confidence_a + CONF_ARMY_BROKEN)
+        war.confidence_d = min(1.5, war.confidence_d + CONF_ENEMY_BROKEN)
+    else:
+        war.exhaustion_d = min(1.0, war.exhaustion_d + EXH_ARMY_BROKEN)
+        war.confidence_d = max(-0.5, war.confidence_d + CONF_ARMY_BROKEN)
+        war.confidence_a = min(1.5, war.confidence_a + CONF_ENEMY_BROKEN)
 
 
 def apply_post_war_baseline(a: Civ, b: Civ) -> None:

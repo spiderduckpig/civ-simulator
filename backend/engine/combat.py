@@ -48,7 +48,7 @@ from .helpers import neighbors, dist, land_astar_path
 from .improvements import imp_type, imp_level
 from .civ import gen_commander_name, next_army_id
 from . import diplomacy
-from .models import Civ, City, Army, War
+from .models import Civ, City, Army, War, Commander, Objective
 
 
 # ── Behavior states (public strings so the frontend can label them) ─────────
@@ -95,7 +95,7 @@ def _make_army(civ: Civ, origin_cell: int, fort_level: int, war_id: str) -> Army
     max_str = ARMY_BASE_STRENGTH * mult
     return Army(
         id=next_army_id(),
-        civ_id=civ["id"],
+        civ_id=civ.id,
         war_key=war_id,
         cell=origin_cell,
         origin_cell=origin_cell,
@@ -104,12 +104,14 @@ def _make_army(civ: Civ, origin_cell: int, fort_level: int, war_id: str) -> Army
         strength=max_str,
         organization=100.0,
         supply=100.0,
-        commander={
-            "name":  gen_commander_name(civ["onom"]),
-            "skill": round(0.75 + random.random() * 0.55, 2),
-        },
+        commander=Commander(
+            name=gen_commander_name(civ.onom),
+            skill=round(0.75 + random.random() * 0.55, 2),
+        ),
         behavior=BEHAVIOR_DEFEND_FORT,
-        objective={"type": "defend", "target_cell": origin_cell, "target_id": None},
+        objective=Objective(
+            type="defend", target_cell=origin_cell, target_id=None,
+        ),
         fortification=0.0,
         fort_source="open field",
     )
@@ -119,7 +121,7 @@ def spawn_war_armies(civ: Civ, war: War, side: str, impr: list, war_id: str) -> 
     """Populate war[armies_<side>] with one army per fort, or a capital
     fallback if the civ has no forts yet."""
     forts: list = []
-    for cell in civ["territory"]:
+    for cell in civ.territory:
         raw = impr[cell] if 0 <= cell < N else 0
         if imp_type(raw) == IMP.FORT:
             forts.append((cell, imp_level(raw)))
@@ -129,11 +131,14 @@ def spawn_war_armies(civ: Civ, war: War, side: str, impr: list, war_id: str) -> 
         for cell, lvl in forts:
             armies.append(_make_army(civ, cell, lvl, war_id))
     else:
-        cap = civ.get("capital", next(iter(civ["territory"]), -1))
+        cap = civ.capital if civ.capital >= 0 else next(iter(civ.territory), -1)
         if cap >= 0:
             armies.append(_make_army(civ, cap, 1, war_id))
 
-    war["armies_a" if side == "a" else "armies_d"] = armies
+    if side == "a":
+        war.armies_a = armies
+    else:
+        war.armies_d = armies
 
 
 # ── Fortification ───────────────────────────────────────────────────────────
@@ -183,7 +188,7 @@ def _compute_fortification(army: Army, civ: Civ, impr: list) -> tuple[float, str
 def _eff_strength(army: Army) -> float:
     """Raw combat power (offense side). Fortification applies separately."""
     org = army.organization / 100.0
-    cmd = army.commander["skill"]
+    cmd = army.commander.skill
     sup = 0.55 + 0.45 * min(1.0, army.supply / 50.0)
     return army.strength * org * cmd * sup
 
@@ -400,7 +405,7 @@ def _select_behavior(
     ter: list, blocked_enemy: Set[int], occupied: Set[int],
     safe_cells: Set[int], enemy_city_cells: list,
     *, is_aggressor: bool,
-) -> tuple[str, dict]:
+) -> tuple[str, Objective]:
     """HMM-like scoring over the behaviour states.
 
     Returns (behavior_key, objective_dict). The objective's `target_cell`
@@ -437,11 +442,9 @@ def _select_behavior(
             target = _nearest_cell(cur, safe_cells)
             if target < 0:
                 target = army.origin_cell
-            return BEHAVIOR_RETREAT, {
-                "type": "retreat",
-                "target_cell": target,
-                "target_id": None,
-            }
+            return BEHAVIOR_RETREAT, Objective(
+                type="retreat", target_cell=target, target_id=None,
+            )
         # else: fall through and run normal HMM
 
     # ── Closest enemy army ───────────────────────────────────────────
@@ -573,52 +576,48 @@ def _select_behavior(
             nearest = _nearest_cell(cur, enemy_city_cells)
             if nearest >= 0:
                 walk = _adjacent_land_cell_toward(nearest, cur, ter, adj_blocked)
-                return BEHAVIOR_ATTACK_CITY, {
-                    "type": "city",
-                    "target_cell": nearest,
-                    "walk_cell":   walk,
-                    "target_id":   None,
-                }
-        return BEHAVIOR_DEFEND_FORT, {
-            "type": "defend",
-            "target_cell": army.origin_cell,
-            "target_id": None,
-        }
+                return BEHAVIOR_ATTACK_CITY, Objective(
+                    type="city", target_cell=nearest,
+                    walk_cell=walk, target_id=None,
+                )
+        return BEHAVIOR_DEFEND_FORT, Objective(
+            type="defend", target_cell=army.origin_cell, target_id=None,
+        )
 
     chosen = max(scores, key=lambda k: scores[k] * (0.85 + random.random() * 0.3))
 
     if chosen == BEHAVIOR_ATTACK_ARMY and best_a is not None:
         tgt = _adjacent_land_cell_toward(best_a.cell, cur, ter, adj_blocked)
-        return chosen, {
-            "type": "army",
-            "target_cell": tgt,
-            "target_id": best_a.id,
-        }
+        return chosen, Objective(
+            type="army",
+            target_cell=tgt,
+            target_id=best_a.id,
+        )
     if chosen == BEHAVIOR_ATTACK_CITY and best_c is not None:
         walk = _adjacent_land_cell_toward(best_c.cell, cur, ter, adj_blocked)
-        return chosen, {
-            "type": "city",
-            "target_cell": best_c.cell,
-            "walk_cell":   walk,
-            "target_id":   None,
-        }
+        return chosen, Objective(
+            type="city",
+            target_cell=best_c.cell,
+            walk_cell=walk,
+            target_id=None,
+        )
     if chosen == BEHAVIOR_RELIEVE_CITY and relieve_target is not None:
-        return chosen, {
-            "type": "relieve",
-            "target_cell": relieve_target.cell,
-            "target_id": None,
-        }
+        return chosen, Objective(
+            type="relieve",
+            target_cell=relieve_target.cell,
+            target_id=None,
+        )
     if chosen == BEHAVIOR_DEFEND_TERRITORY and defend_city is not None:
-        return chosen, {
-            "type": "garrison",
-            "target_cell": defend_city.cell,
-            "target_id": None,
-        }
-    return BEHAVIOR_DEFEND_FORT, {
-        "type": "defend",
-        "target_cell": army.origin_cell,
-        "target_id": None,
-    }
+        return chosen, Objective(
+            type="garrison",
+            target_cell=defend_city.cell,
+            target_id=None,
+        )
+    return BEHAVIOR_DEFEND_FORT, Objective(
+        type="defend",
+        target_cell=army.origin_cell,
+        target_id=None,
+    )
 
 
 # ── Combat resolution ───────────────────────────────────────────────────────
@@ -658,9 +657,9 @@ def _resolve_army_combat(
             a.organization = max(0.0, a.organization - 4.0 - random.random() * 3)
             b.organization = max(0.0, b.organization - 4.0 - random.random() * 3)
             if a.strength <= 0:
-                add_event(f"💀 Year {tick}: {civ_a.name}'s {a.commander['name']} fell in battle vs {civ_b.name}")
+                add_event(f"💀 Year {tick}: {civ_a.name}'s {a.commander.name} fell in battle vs {civ_b.name}")
             if b.strength <= 0:
-                add_event(f"💀 Year {tick}: {civ_b.name}'s {b.commander['name']} fell in battle vs {civ_a.name}")
+                add_event(f"💀 Year {tick}: {civ_b.name}'s {b.commander.name} fell in battle vs {civ_a.name}")
 
 
 def _resolve_city_assault(
@@ -817,12 +816,12 @@ def tick_armies(
 
                 a.behavior  = behavior
                 a.objective = obj
-                if obj and obj.get("target_cell") is not None:
+                if obj and obj.target_cell is not None:
                     # For city attacks, walk toward an adjacent cell; for
                     # everything else the target_cell is already the walk goal.
-                    walk = obj.get("walk_cell")
+                    walk = obj.walk_cell
                     if walk is None:
-                        walk = obj["target_cell"]
+                        walk = obj.target_cell
                     _step_army(a, walk, ter, occupied, blocked_enemy)
 
                 # Refresh fortification AFTER move (the army may have

@@ -5,8 +5,10 @@ from typing import Set, List, Tuple, Optional, Dict, Iterable
 
 from .constants import W, H, N, T
 
-def cell_on_river(cell: int, rivers: dict) -> bool:
-    return cell in rivers["cell_river"]
+from .models import Rivers
+
+def cell_on_river(cell: int, rivers: Rivers) -> bool:
+    return cell in rivers.cell_river
 
 
 # ── Grid utilities ──────────────────────────────────────────────────────────

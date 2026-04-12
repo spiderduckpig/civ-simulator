@@ -9,6 +9,7 @@ from .constants import (
     N, IMP, FOCUS, T,
     INVEST_COST_BASE_FRAC, INVEST_COST_LEVEL_POW, INVEST_MIN_WEALTH_FLOOR,
     INVEST_MAX_PER_TICK, INVEST_PERIOD_TICKS, FOCUS_HMM_PERIOD,
+    FORT_BUILD_METAL_COST,
 )
 from .improvements import (
     imp_type, imp_level, upgrade_imp, make_imp,
@@ -196,7 +197,7 @@ def _place_new_improvement(
 
 
 def _place_advanced_structure(
-    city: City, ter: list, impr: list,
+    city: City, ter: list, res: dict, impr: list,
     *, rand: Callable[[], float] = random.random,
 ) -> bool:
     """Try to place an advanced structure (port / fishery / windmill /
@@ -214,10 +215,25 @@ def _place_advanced_structure(
         return False
     random.shuffle(empties)
 
+    # Smitheries are only useful if the city has ore coming in.
+    has_ore_potential = any(
+        0 <= t < N and (
+            imp_type(impr[t]) == IMP.MINE or
+            (res.get(t) == "iron")
+        )
+        for t in tiles
+    )
+    # Check current ore stock/production too
+    current_ore = getattr(city, "city_ore", 0.0)
+    current_ore_total = getattr(city, "city_ore_total", 0.0)
+    has_ore = current_ore > 0.1 or current_ore_total > 0.1 or has_ore_potential
+
     focus = city.focus
     for cell in empties[:12]:
         pick = advanced_structure_for(cell, ter, impr, focus, rand=rand)
         if pick == IMP.NONE:
+            continue
+        if pick == IMP.SMITHERY and not has_ore:
             continue
         cost = max(INVEST_MIN_WEALTH_FLOOR,
                    city.wealth * INVEST_COST_BASE_FRAC * 0.8)
@@ -280,6 +296,11 @@ def _place_fort(
                 return 8
         return 20
 
+    # Metal gate: building a fort consumes raw metal from the civ stockpile.
+    # No metal → no new fort (upkeep still draws from the same pool).
+    if getattr(civ, "metal_stock", 0.0) < FORT_BUILD_METAL_COST:
+        return False
+
     empties.sort(key=border_score)
     # Cheap-ish: forts are strategic so they cost a bit more than a farm.
     cost = max(INVEST_MIN_WEALTH_FLOOR * 1.2,
@@ -287,6 +308,7 @@ def _place_fort(
     if not _try_debit(city, cost):
         return False
 
+    civ.metal_stock -= FORT_BUILD_METAL_COST
     impr[empties[0]] = make_imp(IMP.FORT, 1)
     return True
 
@@ -410,13 +432,11 @@ def tick_city_development(
         # ── Fort placement ───────────────────────────────────────────────
         # Cities will build a brand new fort on an empty border tile when:
         #   - the civ is at war, OR
-        #   - this city's focus is DEFENSE, OR
-        #   - the civ has zero forts anywhere (safety net).
+        #   - this city's focus is DEFENSE
         # Counted per-city: don't spam forts, only one attempt per tick.
         want_fort = (
             civ_is_at_war
             or focus == FOCUS.DEFENSE
-            or not has_any_fort
         )
         if want_fort and om is not None:
             # Roughly cap fort density: one fort per ~4 worked tiles in this city.
@@ -438,7 +458,7 @@ def tick_city_development(
             placed = _place_new_improvement(city, ter, res, rivers, impr)
             if not placed:
                 # Finally, try an advanced structure (port/fishery/…)
-                _place_advanced_structure(city, ter, impr)
+                _place_advanced_structure(city, ter, res, impr)
 
         # ── Rare: rebuild a different improvement on an occupied tile ────
         # Very low per-city chance. Only fires when upgrades aren't hogging

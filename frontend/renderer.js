@@ -26,8 +26,15 @@ const IMP_TYPE_MASK = (1 << IMP_TYPE_BITS) - 1;
 function impType(raw)  { return raw & IMP_TYPE_MASK; }
 function impLevel(raw) { return (raw >> IMP_TYPE_BITS) + 1; }
 
-function _impInfo(raw, cell, rivers, ter) {
-    if (!raw) return { name: "—", level: 0, detail: null };
+// Staffable building types (mirror of engine.employment.STAFFABLE_TYPES).
+// Forts are intentionally excluded — they take metal upkeep, not workers.
+const STAFFABLE_IMP_TYPES = new Set([1, 2, 3, 4, 5, 6, 8, 9, 10]);
+
+// Must match constants.N_EMPLOYEES_PER_LEVEL on the backend.
+const EMPLOYEES_PER_LEVEL = 20;
+
+function _impInfo(raw, cell, rivers, ter, ownerCity) {
+    if (!raw) return { name: "—", level: 0, detail: null, employees: null };
     const type = impType(raw);
     const lvl = impLevel(raw);
     const name = IMP_NAMES[type] || "—";
@@ -38,35 +45,55 @@ function _impInfo(raw, cell, rivers, ter) {
         if (n >= 0 && n < W * H && ter[n] <= 2) { isCoastal = true; break; }
     }
     const coast = isCoastal ? 1.5 : 1.0;
+
+    // Staffing lookup: ownerCity.staffing is { "cell_int": levels_filled }.
+    let staffLvl = 0;
+    if (ownerCity && ownerCity.staffing) {
+        const v = ownerCity.staffing[String(cell)];
+        if (typeof v === "number") staffLvl = Math.min(v, lvl);
+    }
+    const staffFrac = lvl > 0 ? staffLvl / lvl : 0;
+    const maxEmp = lvl * EMPLOYEES_PER_LEVEL;
+    const curEmp = staffLvl * EMPLOYEES_PER_LEVEL;
+    let employees = null;
+    if (STAFFABLE_IMP_TYPES.has(type)) {
+        employees = `👥 Employees ${curEmp} / ${maxEmp} (${staffLvl}/${lvl} staffed)`;
+    }
+
+    const s = (x) => (Math.round(x * 10) / 10);
+
     let detail = null;
     if (type === 1) { // Farm
-        const food = ((1.5 + lvl * 1.0) * riv * coast * 10 | 0) / 10;
+        const foodMax = (1.5 + lvl * 1.0) * riv * coast;
+        const food = s(foodMax * staffFrac);
         let upCost = lvl < 20 ? `(up ${15 * lvl * lvl}g)` : "(max)";
-        detail = `🍞 ${food} food ${upCost}`;
+        detail = `🍞 ${food} food (max ${s(foodMax)}) ${upCost}`;
     } else if (type === 2) { // Mine
         let upCost = lvl < 5 ? `(up ${15 * lvl * 1.5}g)` : "(max)";
-        detail = `⚙️ Produces Ore ${upCost}`;
+        detail = `⚙️ Produces Ore @ ${Math.round(staffFrac * 100)}% ${upCost}`;
     } else if (type === 4) { // Quarry
         let upCost = lvl < 5 ? `(up ${15 * lvl * 1.5}g)` : "(max)";
-        detail = `🧱 Produces Stone ${upCost}`;
+        detail = `🧱 Produces Stone @ ${Math.round(staffFrac * 100)}% ${upCost}`;
     } else if (type === 6) { // Windmill
         let upCost = lvl < 5 ? `(up ${15 * lvl * 1.5}g)` : "(max)";
-        detail = `🌾 Multiplies neighbor farms by x${1.0 + lvl * 0.5} ${upCost}`;
+        // Linear scaling: effective bonus uses staffed level, not building level.
+        detail = `🌾 Neighbor farms ×${(1.0 + staffLvl * 0.5).toFixed(2)} (max ×${(1.0 + lvl * 0.5).toFixed(2)}) ${upCost}`;
     } else if (type === 7) { // Fort
         let upCost = lvl < 5 ? `(up ${15 * lvl * 1.5}g)` : "(max)";
-        detail = `🏰 Garrison ${upCost}`;
+        detail = `🏰 Garrison (10 metal/tick upkeep) ${upCost}`;
     } else if (type === 8) { // Port
         let upCost = lvl < 5 ? `(up ${15 * lvl * 1.5}g)` : "(max)";
-        detail = `🚢 +${lvl * 2.0} Trade Potential ${upCost}`;
+        detail = `🚢 +${s(lvl * 2.0 * staffFrac)} Trade (max +${s(lvl * 2.0)}) ${upCost}`;
     } else if (type === 9) { // Smithery
         let upCost = lvl < 5 ? `(up ${15 * lvl * 1.5}g)` : "(max)";
-        detail = `🛡️ Refines up to ${lvl * 2.0} Ore into Metal ${upCost}`;
+        detail = `🛡️ Refines up to ${s(lvl * 2.0 * staffFrac)} Ore → Metal (max ${s(lvl * 2.0)}) ${upCost}`;
     } else if (type === 10) { // Fishery
-        const food = ((1.0 + lvl * 0.8) * coast * 10 | 0) / 10;
+        const foodMax = (1.0 + lvl * 0.8) * coast;
+        const food = s(foodMax * staffFrac);
         let upCost = lvl < 5 ? "upgradable" : "(max)";
-        detail = `🐟 ${food} food + ${(lvl * 0.8).toFixed(1)} trade ${upCost}`;
+        detail = `🐟 ${food} food + ${s(lvl * 0.8 * staffFrac)} trade (max ${s(foodMax)}f) ${upCost}`;
     }
-    return { name, level: lvl, detail };
+    return { name, level: lvl, detail, employees };
 }
 
 // ── Colour helpers ────────────────────────────────────────────────────────────
@@ -306,6 +333,27 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
                     ctx.fillText(lvl.toString(), x + CELL / 2, y + CELL / 2 + 0.5);
                     ctx.shadowBlur = 0;
                 }
+            } else if (it === 9) { // Smithery — anvil/forge appearance
+                ctx.globalAlpha = 1.0;
+                // Base platform
+                ctx.fillStyle = "#4a4a4a";
+                ctx.fillRect(x + 1, y + CELL - 2.5, CELL - 2, 1.5);
+                // Anvil body
+                ctx.fillStyle = "#2a2a2a";
+                const ax_body = x + CELL/2 - 1.2;
+                const ay_body = y + CELL - 3.5;
+                ctx.fillRect(ax_body, ay_body, 2.4, 1.5);
+                // Horn/Tail
+                ctx.fillRect(ax_body - 0.8, ay_body, 0.8, 0.8);
+                ctx.fillRect(ax_body + 2.4, ay_body, 0.6, 0.8);
+                
+                // Orange glow (forge)
+                ctx.fillStyle = "#ff6a00";
+                ctx.globalAlpha = 0.6 + Math.sin(tick * 0.2) * 0.3;
+                ctx.beginPath();
+                ctx.arc(x + CELL/2 + 1, y + CELL/2 - 0.5, 0.8, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1.0;
             } else {
                 ctx.fillStyle = imp_colors[it] || imp_colors[raw];
                 ctx.globalAlpha = 0.4;
@@ -515,8 +563,8 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
         for (const city of civ.cities) {
             const cx = city.cell % W, cy = (city.cell / W) | 0;
             const px = cx * CELL + CELL / 2, py = cy * CELL + CELL / 2;
-            const rawSz = Math.sqrt(city.population) * 0.045;
-            const sz = Math.max(0.8, Math.min(7.5, rawSz));
+            const rawSz = Math.sqrt(city.population) * 0.055;
+            const sz = Math.max(1.2, Math.min(7.5, rawSz));
             const showLabel = city.is_capital || (zoom >= 1.5 && city.population > 60) || zoom >= 2.5;
 
             if (city.is_capital) {
@@ -781,6 +829,17 @@ export function getCellInfo(mapData, state, cellIndex) {
     // Match exact city cell
     let city = civ ? civ.cities.find(c => c.cell === cellIndex) : null;
 
+    // Also figure out which city (if any) WORKS this tile — used to look up
+    // staffing for the improvement on this cell, which lives on the owning
+    // city's `staffing` dict (keyed by cell).
+    let workingCity = city;
+    if (!workingCity && civ) {
+        for (const c2 of civ.cities) {
+            const tiles = c2.tiles || [];
+            if (tiles.includes(cellIndex)) { workingCity = c2; break; }
+        }
+    }
+
     // Check coastal: any neighbour is ocean/coast/deep
     let coastal = false;
     for (const n of neighbors(cellIndex)) {
@@ -796,17 +855,17 @@ export function getCellInfo(mapData, state, cellIndex) {
         let farmLvls = 0, mineLvls = 0;
         for (const t of tiles) {
             const raw = impr[t] || 0;
-            const impType = raw % 10;
-            const lvl = (raw / 10 | 0) + 1;
-            if (impType === 1) { farms++; farmLvls += lvl; }
-            else if (impType === 2) { mines++; mineLvls += lvl; }
-            else if (impType === 3) lumber++;
-            else if (impType === 4) quarries++;
-            else if (impType === 5) pastures++;
-            else if (impType === 6) windmills++;
-            else if (impType === 7) forts++;
-            else if (impType === 8) ports++;
-            else if (impType === 9) smitheries++;
+            const it = impType(raw);
+            const lvl = impLevel(raw);
+            if (it === 1) { farms++; farmLvls += lvl; }
+            else if (it === 2) { mines++; mineLvls += lvl; }
+            else if (it === 3) lumber++;
+            else if (it === 4) quarries++;
+            else if (it === 5) pastures++;
+            else if (it === 6) windmills++;
+            else if (it === 7) forts++;
+            else if (it === 8) ports++;
+            else if (it === 9) smitheries++;
             
             if (res[t]) resCount++;
         }
@@ -911,10 +970,13 @@ export function getCellInfo(mapData, state, cellIndex) {
             city_ore: city.city_ore | 0,
             city_stone: city.city_stone | 0,
             city_metal: city.city_metal | 0,
+            city_ore_total: city.city_ore_total | 0,
+            city_stone_total: city.city_stone_total | 0,
+            city_metal_total: city.city_metal_total | 0,
             focus: city.focus || 1,
             stats: cityStats,
         } : null,
-        imp:     _impInfo(impr[cellIndex] || 0, cellIndex, rivers, ter),
+        imp:     _impInfo(impr[cellIndex] || 0, cellIndex, rivers, ter, workingCity),
         river:   rivers.cell_river.has(cellIndex),
         coastal,
     };

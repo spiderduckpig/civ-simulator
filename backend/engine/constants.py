@@ -169,6 +169,7 @@ CAPITAL_DEFENSE_BONUS  = 0.25      # additional bonus on top of CITY_DEFENSE_BON
 FRIENDLY_TERRAIN_BONUS = 0.08      # small defensive edge anywhere inside own borders
 
 FORT_METAL_UPKEEP     = 10.0       # per fort level per tick
+FORT_BUILD_METAL_COST = 25.0       # metal required (and consumed) to raise a new fort
 CITY_BASE_HP          = 65.0
 CAPITAL_HP_BONUS      = 50.0
 FORT_HP_BONUS         = 25.0       # per level when a fort sits on the same cell
@@ -186,6 +187,12 @@ INVEST_MAX_PER_TICK     = 1      # at most this many upgrades per city per inves
 INVEST_PERIOD_TICKS     = 3      # how often a city attempts investment
 
 FOCUS_HMM_PERIOD        = 12     # how often a city reconsiders its focus
+
+# ── Employment ──────────────────────────────────────────────────────────────
+# Buildings take workers. A level-K building can be staffed up to K levels
+# (one level = ``N_EMPLOYEES_PER_LEVEL`` people). Production scales with the
+# fraction of levels that are actually staffed. See engine.employment.
+N_EMPLOYEES_PER_LEVEL   = 20
 
 DEFAULT_PARAMS = {
     "river_pref":  3.0,

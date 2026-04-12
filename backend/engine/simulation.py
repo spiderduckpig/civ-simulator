@@ -16,12 +16,14 @@ from .helpers import (
 )
 from .improvements import imp_type, imp_level, downgrade_imp
 from .mapgen import cell_coastal, cell_river_mouth
-from .civ import build_road, gen_city_name
-from .models import City
+from .models import City, Civ, War, Road, Rivers
 
+from .civ import gen_city_name, build_road
 from . import combat
 from . import city_dev
 from . import diplomacy
+from . import employment
+from .employment import staffed_level
 
 
 # ── Settle scoring ─────────────────────────────────────────────────────────
@@ -137,21 +139,21 @@ def _settle_peace(war, a, b, om, civs, tick, add_event):
 # ── Per-tick simulation driver ─────────────────────────────────────────────
 
 def tick_sim(
-    civs:   List[dict],
-    ter:    list,
-    res:    dict,
-    om:     list,
-    wars:   dict,
-    rivers: dict,
-    impr:   list,
-    tick:   int,
+    civs:      List[Civ],
+    ter:       list,
+    res:       dict,
+    om:        list,
+    wars:      dict,
+    rivers:    Rivers,
+    impr:      list,
+    tick:      int,
     add_event: Callable[[str], None],
-    params: dict,
-) -> List[dict]:
+    params:    dict,
+) -> List[Civ]:
     """Run one simulation step. Returns any newly-spawned civs (currently
     always empty — fragmentation is disabled)."""
 
-    alive = [c for c in civs if getattr(c, "alive", True)]
+    alive = [c for c in civs if c.alive]
 
     # ── Diplomacy ─────────────────────────────────────────────────────────
     # Cache border cells per civ once — the pair loop is O(C²).
@@ -207,36 +209,36 @@ def tick_sim(
                     and diplomacy.consider_alliance(a, b, wars, civs_by_id)):
                 diplomacy.form_alliance(a, b)
                 add_event(
-                    f"🤝 Year {tick}: {a['name']} and {b['name']} formed an alliance"
+                    f"🤝 Year {tick}: {a.name} and {b.name} formed an alliance"
                 )
-                a["events"].append(f"Year {a['age']}: Allied with {b['name']}")
-                b["events"].append(f"Year {b['age']}: Allied with {a['name']}")
+                a.events.append(f"Year {a.age}: Allied with {b.name}")
+                b.events.append(f"Year {b.age}: Allied with {a.name}")
 
     # ── Per-civ tick ───────────────────────────────────────────────────────
     for civ in alive:
-        civ["age"] += 1
+        civ.age += 1
         ore_out = stone_out = metal_out = trade_out = raw_gold = 0.0
 
         # ── Voronoi: assign each territory cell to nearest city ──────────
         city_cells_map: dict = {}
-        for city in civ["cities"]:
-            city_cells_map[city["cell"]] = []
+        for city in civ.cities:
+            city_cells_map[city.cell] = []
 
-        if civ["cities"]:
-            for cell in civ["territory"]:
+        if civ.cities:
+            for cell in civ.territory:
                 best_city = None
                 best_d = float("inf")
-                for city in civ["cities"]:
-                    d = dist(cell, city["cell"])
+                for city in civ.cities:
+                    d = dist(cell, city.cell)
                     if d < best_d:
                         best_d = d
-                        best_city = city["cell"]
+                        best_city = city.cell
                 if best_city is not None:
                     city_cells_map[best_city].append(cell)
 
         # ── Per-city production ──────────────────────────────────────────
         farm_out = 0.0
-        for city in civ["cities"]:
+        for city in civ.cities:
             city_food  = 0.0
             city_ore   = 0.0
             city_stone = 0.0
@@ -244,12 +246,12 @@ def tick_sim(
             smithery_cap = 0.0
             port_bonus   = 0.0
 
-            city["near_river"] = cell_on_river(city["cell"], rivers)
-            city["coastal"]    = cell_coastal(city["cell"], ter)
+            city.near_river = cell_on_river(city.cell, rivers)
+            city.coastal    = cell_coastal(city.cell, ter)
 
-            assigned = city_cells_map.get(city["cell"], [])
-            city["tiles"] = assigned
-            city["farm_tiles"] = []
+            assigned = city_cells_map.get(city.cell, [])
+            city.tiles = assigned
+            city.farm_tiles = []
 
             for cell in assigned:
                 raw = impr[cell]
@@ -260,52 +262,63 @@ def tick_sim(
                 coast_mult = 1.5 if cell_coastal(cell, ter) else 1.0
                 r = res.get(cell)
 
+                # Staffing fraction: l / K for staffable buildings. Forts are
+                # excluded (no workforce). If a brand-new building hasn't been
+                # staffed yet, staff_frac is 0 and it produces nothing until
+                # the next employment update.
+                staff = staffed_level(city, cell, lvl) if lvl > 0 else 0
+                staff_frac = (staff / lvl) if lvl > 0 else 0.0
+
                 if it == IMP.FARM:
                     food_val = (1.5 + lvl * 1.0) * riv * coast_mult
-                    # Windmill neighbour bonus
+                    # Windmill neighbour bonus — linear in the neighbour's
+                    # staffed level (so a half-staffed lvl-2 windmill is
+                    # equivalent to a fully-staffed lvl-1 windmill).
                     wm_mult = 1.0
                     for n in neighbors(cell):
                         if 0 <= n < N:
                             n_raw = impr[n]
                             if imp_type(n_raw) == IMP.WINDMILL:
-                                wm_mult += imp_level(n_raw) * 0.5
-                    city_food += food_val * wm_mult
-                    city["farm_tiles"].append(cell)
+                                n_lvl = imp_level(n_raw)
+                                n_staff = staffed_level(city, n, n_lvl)
+                                wm_mult += n_staff * 0.5
+                    city_food += food_val * wm_mult * staff_frac
+                    city.farm_tiles.append(cell)
                 elif it == IMP.WINDMILL:
-                    city["farm_tiles"].append(cell)
+                    city.farm_tiles.append(cell)
                 elif it == IMP.MINE:
                     if r == "stone":
-                        city_stone += 0.5 + lvl * 0.5
-                        city_gold  += 0.2 + lvl * 0.3
+                        city_stone += (0.5 + lvl * 0.5) * staff_frac
+                        city_gold  += (0.2 + lvl * 0.3) * staff_frac
                     elif r == "iron":
-                        city_ore  += 1.0 + lvl * 0.5
-                        city_gold += 1.5
+                        city_ore  += (1.0 + lvl * 0.5) * staff_frac
+                        city_gold += 1.5 * staff_frac
                     elif r in ("gold", "gems"):
-                        city_gold += 3.0 + lvl * 1.0
+                        city_gold += (3.0 + lvl * 1.0) * staff_frac
                     else:
-                        city_ore   += 0.5 + lvl * 0.25
-                        city_stone += 0.2 + lvl * 0.25
-                        city_gold  += 0.5
-                    city["farm_tiles"].append(cell)
+                        city_ore   += (0.5 + lvl * 0.25) * staff_frac
+                        city_stone += (0.2 + lvl * 0.25) * staff_frac
+                        city_gold  += 0.5 * staff_frac
+                    city.farm_tiles.append(cell)
                 elif it == IMP.LUMBER:
-                    city_gold += 0.3
+                    city_gold += 0.3 * staff_frac
                 elif it == IMP.PASTURE:
-                    city_food += 1.5 * riv
-                    city["farm_tiles"].append(cell)
+                    city_food += 1.5 * riv * staff_frac
+                    city.farm_tiles.append(cell)
                 elif it == IMP.PORT:
-                    port_bonus += lvl * 2.0
-                    city["farm_tiles"].append(cell)
+                    port_bonus += lvl * 2.0 * staff_frac
+                    city.farm_tiles.append(cell)
                 elif it == IMP.SMITHERY:
-                    smithery_cap += lvl * 2.0
-                    city["farm_tiles"].append(cell)
+                    smithery_cap += lvl * 2.0 * staff_frac
+                    city.farm_tiles.append(cell)
                 elif it == IMP.FISHERY:
                     # Fisheries: food from sea + a small trade bonus. Scale
                     # with level like farms, but slightly weaker per level.
-                    city_food += (1.0 + lvl * 0.8) * coast_mult
-                    port_bonus += lvl * 0.8
-                    city["farm_tiles"].append(cell)
+                    city_food += (1.0 + lvl * 0.8) * coast_mult * staff_frac
+                    port_bonus += lvl * 0.8 * staff_frac
+                    city.farm_tiles.append(cell)
                 elif it == IMP.FORT:
-                    city["farm_tiles"].append(cell)
+                    city.farm_tiles.append(cell)
 
                 t = ter[cell]
                 if t in (T.PLAINS, T.GRASS):
@@ -320,23 +333,26 @@ def tick_sim(
                 elif r:             city_gold += 0.5
 
             # Refine ore to metal
+            city.city_ore_total   = city_ore
+            city.city_stone_total = city_stone
             city_metal = min(city_ore, smithery_cap)
+            city.city_metal_total = city_metal
             city_ore  -= city_metal
 
-            city["city_ore"]   = city_ore
-            city["city_stone"] = city_stone
-            city["city_metal"] = city_metal
+            city.city_ore   = city_ore
+            city.city_stone = city_stone
+            city.city_metal = city_metal
 
             # Site bonuses
-            city_riv_b   = 1.5 if city["near_river"] else 1.0
-            city_coast_b = 1.3 if city["coastal"]    else 1.0
-            is_mouth     = cell_river_mouth(city["cell"], ter, rivers)
-            city["river_mouth"] = is_mouth
+            city_riv_b   = 1.5 if city.near_river else 1.0
+            city_coast_b = 1.3 if city.coastal    else 1.0
+            is_mouth     = cell_river_mouth(city.cell, ter, rivers)
+            city.river_mouth = is_mouth
             mouth_b = 2.0 if is_mouth else 1.0
             city_food *= city_riv_b * city_coast_b
 
-            city["food_production"] = round(city_food, 1)
-            city["carrying_cap"]    = max(50, 50 + city_food * 18)
+            city.food_production = round(city_food, 1)
+            city.carrying_cap    = max(50, 50 + city_food * 18)
 
             # Trade potential (from assigned tile resources + pop)
             trade_res_bonus = 0.0
@@ -346,8 +362,8 @@ def tick_sim(
                 elif r2 in ("spices", "ivory"): trade_res_bonus += 6.0
                 elif r2 in ("iron", "stone"):   trade_res_bonus += 3.0
                 elif r2 == "horses":            trade_res_bonus += 2.0
-            city["trade_potential"] = (
-                city["population"] * 0.15 + trade_res_bonus + 4
+            city.trade_potential = (
+                city.population * 0.15 + trade_res_bonus + 4
             ) * city_riv_b * city_coast_b * mouth_b + port_bonus
 
             farm_out  += city_food
@@ -356,20 +372,20 @@ def tick_sim(
             metal_out += city_metal
             raw_gold  += city_gold
 
-            city["_city_gold"] = city_gold  # stash for wealth accumulation below
+            city._city_gold = city_gold  # stash for wealth accumulation below
 
         # ── Road trade: connected cities share trade ─────────────────────
         road_graph: dict = {}
-        city_set = {c["cell"] for c in civ["cities"]}
-        for r in civ["roads"]:
-            a2, b2 = r["from"], r["to"]
-            rd = len(r["path"])
+        city_set = {c.cell for c in civ.cities}
+        for r in civ.roads:
+            a2, b2 = r.from_cell, r.to_cell
+            rd = len(r.path)
             if a2 in city_set and b2 in city_set:
                 road_graph.setdefault(a2, []).append((b2, rd))
                 road_graph.setdefault(b2, []).append((a2, rd))
             # Intermediate cities on the path: enumerate once (was O(|path|²)
-            # via repeated r["path"].index(pc)).
-            for idx, pc in enumerate(r["path"]):
+            # via repeated r.path.index(pc)).
+            for idx, pc in enumerate(r.path):
                 if pc in city_set and pc != a2 and pc != b2:
                     if a2 in city_set:
                         road_graph.setdefault(a2, []).append((pc, idx + 1))
@@ -379,13 +395,13 @@ def tick_sim(
                         road_graph.setdefault(b2, []).append((pc, d2))
                         road_graph.setdefault(pc, []).append((b2, d2))
 
-        tp_map = {c["cell"]: c["trade_potential"] for c in civ["cities"]}
+        tp_map = {c.cell: c.trade_potential for c in civ.cities}
 
         # Proper Dijkstra over the road graph (edge weights vary by segment
         # length, so the old list.pop(0) Bellman-Ford-ish relaxation was both
         # incorrect on ties and O(V²) per step).
-        for city in civ["cities"]:
-            cc = city["cell"]
+        for city in civ.cities:
+            cc = city.cell
             road_trade = 0.0
             best_dist: dict = {cc: 0}
             heap: list = [(0, cc)]
@@ -485,6 +501,12 @@ def tick_sim(
         # ── City development (investment, focus HMM, placement) ──────────
         city_dev.tick_city_development(civ, wars, ter, res, rivers, impr, tick, om)
 
+        # ── Employment: reconcile staff levels with (possibly new) pop ───
+        # Runs after city_dev so newly-built improvements are eligible to
+        # be staffed on the next tick's production pass.
+        for city in civ.cities:
+            employment.update_city_employment(city, impr)
+
         # ── City founding ────────────────────────────────────────────────
         all_city_cells = [ci.cell for other in alive for ci in other.cities]
         at_war = any(
@@ -573,7 +595,7 @@ def tick_sim(
         # territory the combat subsystem gave them. We only prune cities
         # whose cell is no longer ours, and restore a capital if needed.
         civ.cities = [c for c in civ.cities if c.cell in civ.territory]
-        civ.roads  = [r for r in getattr(civ, "roads", []) if r["from"] in civ.territory and r["to"] in civ.territory]
+        civ.roads  = [r for r in getattr(civ, "roads", []) if r.from_cell in civ.territory and r.to_cell in civ.territory]
 
         if civ.cities and not any(c.is_capital for c in civ.cities):
             civ.cities[0].is_capital = True
@@ -598,76 +620,82 @@ def tick_sim(
                         diplomacy.break_alliances_with(civ, civs_by_id)
                         add_event(f"🏳 Year {tick}: {civ.name} surrendered to {conqueror.name}!")
                         civ.events.append(f"Year {civ.age}: Surrendered to {conqueror.name}")
-                        conqueror["events"].append(f"Year {conqueror['age']}: Conquered {civ['name']}")
+                        conqueror.events.append(f"Year {conqueror.age}: Conquered {civ.name}")
                     wars.pop(wk, None)
                     break
             continue
 
         # Survival safeguards
-        if civ["food"] < -30:
-            civ["food"] = 0
-            add_event(f"🍞 Year {tick}: {civ['name']} endured a famine")
-        if civ["population"] < 15:
-            civ["population"] = 15
-            for city in civ["cities"]:
-                city["population"] = max(city["population"], 10)
-        if len(civ["territory"]) < 4 and civ["cities"]:
-            cap = civ["cities"][0]["cell"]
+        if civ.food < -30:
+            civ.food = 0
+            add_event(f"🍞 Year {tick}: {civ.name} endured a famine")
+        if civ.population < 15:
+            civ.population = 15
+            for city in civ.cities:
+                city.population = max(city.population, 10)
+        if len(civ.territory) < 4 and civ.cities:
+            cap = civ.cities[0].cell
             sx, sy = cap % W, cap // W
             for dy in range(-1, 2):
                 for dx in range(-1, 2):
                     ni = (sy + dy) * W + (sx + dx)
                     if 0 <= ni < N and is_land(ter, ni) and om[ni] == 0:
-                        civ["territory"].add(ni)
-                        om[ni] = civ["id"]
+                        civ.territory.add(ni)
+                        om[ni] = civ.id
 
         # Peacetime re-foundation if the civ lost all cities but still has land
-        if not civ["cities"] and civ["territory"] and not civ_at_war:
+        if not civ.cities and civ.territory and not civ_at_war:
             all_other_cities = [
-                ci["cell"] for other in alive if other["id"] != civ["id"]
-                for ci in other["cities"]
+                ci.cell for other in alive if other.id != civ.id
+                for ci in other.cities
             ]
             best_refound = None
             best_min_d = -1
-            for cell in list(civ["territory"])[:80]:
+            for cell in list(civ.territory)[:80]:
                 if ter[cell] in (T.MTN, T.SNOW) or ter[cell] <= T.COAST:
                     continue
                 md = min((dist(cell, oc) for oc in all_other_cities), default=999)
                 if md > best_min_d:
                     best_min_d = md
                     best_refound = cell
-            cap_cell = best_refound if best_refound is not None else next(iter(civ["territory"]))
-            cn = gen_city_name(civ["onom"])
-            refounded = {
-                "cell": cap_cell, "name": cn, "population": 20.0,
-                "is_capital": True, "founded": tick, "trade": 3.0,
-                "wealth": 5.0,
-                "focus": random.choice([
+            cap_cell = best_refound if best_refound is not None else next(iter(civ.territory))
+            cn = gen_city_name(civ.onom)
+            refounded = City(
+                cell=cap_cell,
+                name=cn,
+                population=20.0,
+                is_capital=True,
+                founded=tick,
+                trade=3.0,
+                wealth=5.0,
+                focus=random.choice([
                     FOCUS.FARMING, FOCUS.MINING, FOCUS.DEFENSE, FOCUS.TRADE,
                 ]),
-                "near_river": cell_on_river(cap_cell, rivers),
-                "coastal":    cell_coastal(cap_cell, ter),
-                "food_production": 0.0, "carrying_cap": 50,
-                "tiles": [], "farm_tiles": [],
-                "last_dmg_tick": -999,
-            }
-            refounded["max_hp"] = combat.city_max_hp(refounded, impr)
-            refounded["hp"]     = refounded["max_hp"]
-            civ["cities"]  = [refounded]
-            civ["capital"] = cap_cell
-            add_event(f"🏛 Year {tick}: {civ['name']} refounded {cn}")
+                near_river=cell_on_river(cap_cell, rivers),
+                coastal=cell_coastal(cap_cell, ter),
+                food_production=0.0,
+                carrying_cap=50,
+                tiles=[],
+                farm_tiles=[],
+                last_dmg_tick=-999,
+            )
+            refounded.max_hp = combat.city_max_hp(refounded, impr)
+            refounded.hp     = refounded.max_hp
+            civ.cities  = [refounded]
+            civ.capital = cap_cell
+            add_event(f"🏛 Year {tick}: {civ.name} refounded {cn}")
 
     # ── Army tick (movement, behavior, combat, fort respawn) ──────────────
     combat.tick_armies(alive, wars, ter, impr, om, tick, add_event)
 
     # ── City HP regen ─────────────────────────────────────────────────────
     for civ in alive:
-        for city in civ["cities"]:
+        for city in civ.cities:
             combat.ensure_city_hp(city, impr)
             # Recompute max_hp in case a fort was built/destroyed under the city
-            city["max_hp"] = combat.city_max_hp(city, impr)
-            if city["hp"] < city["max_hp"] and tick - city.get("last_dmg_tick", -999) > 8:
-                city["hp"] = min(city["max_hp"], city["hp"] + CITY_HP_REGEN)
+            city.max_hp = combat.city_max_hp(city, impr)
+            if city.hp < city.max_hp and tick - city.last_dmg_tick > 8:
+                city.hp = min(city.max_hp, city.hp + CITY_HP_REGEN)
 
     # Fragmentation disabled — nations may be non-contiguous.
     return []
