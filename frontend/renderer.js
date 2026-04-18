@@ -15,10 +15,10 @@ const TERRAIN_NAMES = {
 
 const RESOURCE_ICONS = {
     iron:"⛏", gold:"✦", horses:"🐎", wheat:"🌾", fish:"🐟",
-    gems:"💎", wood:"🪵", stone:"🪨", spices:"🌶", ivory:"🦷",
+    gems:"💎", wood:"🪵", stone:"🪨", spices:"🌶", ivory:"🦷", fabric:"🧵",
 };
 
-const IMP_NAMES = { 0:"—", 1:"Farm", 2:"Mine", 3:"Lumber", 4:"Quarry", 5:"Pasture", 6:"Windmill", 7:"Fort", 8:"Port", 9:"Smithery", 10:"Fishery" };
+const IMP_NAMES = { 0:"—", 1:"Farm", 2:"Mine", 3:"Lumber", 4:"Quarry", 5:"Pasture", 6:"Windmill", 7:"Fort", 8:"Port", 9:"Smithery", 10:"Fishery", 11:"Cotton Farm" };
 
 // Bit-packed improvement encoding: low 5 bits = type (0-31), rest = level-1.
 const IMP_TYPE_BITS = 5;
@@ -28,13 +28,13 @@ function impLevel(raw) { return (raw >> IMP_TYPE_BITS) + 1; }
 
 // Staffable building types (mirror of engine.employment.STAFFABLE_TYPES).
 // Forts are intentionally excluded — they take metal upkeep, not workers.
-const STAFFABLE_IMP_TYPES = new Set([1, 2, 3, 4, 5, 6, 8, 9, 10]);
+const STAFFABLE_IMP_TYPES = new Set([1, 2, 3, 4, 5, 6, 8, 9, 10, 11]);
 
 // Must match constants.N_EMPLOYEES_PER_LEVEL on the backend.
 const EMPLOYEES_PER_LEVEL = 20;
 
 // Mirror of backend regions.IMP_PRIMARY_GOOD — which good each producer yields.
-const IMP_PRIMARY_GOOD = { 1: "food", 10: "food", 2: "ore", 4: "stone", 3: "lumber", 9: "metal" };
+const IMP_PRIMARY_GOOD = { 1: "grain", 10: "grain", 11: "fabric", 2: "copper_ore", 4: "stone", 3: "lumber", 9: "copper" };
 
 function _impInfo(raw, cell, rivers, ter, ownerCity, goodEff) {
     if (!raw) return { name: "—", level: 0, detail: null, employees: null };
@@ -67,13 +67,13 @@ function _impInfo(raw, cell, rivers, ter, ownerCity, goodEff) {
 
     let detail = null;
     if (type === 1) { // Farm
-        const foodMax = (1.5 + lvl * 1.0) * riv * coast;
-        const food = s(foodMax * staffFrac);
+        const grainMax = (1.5 + lvl * 1.0) * riv * coast;
+        const grain = s(grainMax * staffFrac);
         let upCost = lvl < 20 ? `(up ${15 * lvl * lvl}g)` : "(max)";
-        detail = `🍞 ${food} food (max ${s(foodMax)}) ${upCost}`;
+        detail = `🌾 ${grain} grain (max ${s(grainMax)}) ${upCost}`;
     } else if (type === 2) { // Mine
         let upCost = lvl < 5 ? `(up ${15 * lvl * 1.5}g)` : "(max)";
-        detail = `⚙️ Produces Ore @ ${Math.round(staffFrac * 100)}% ${upCost}`;
+        detail = `⛏ Produces Copper Ore @ ${Math.round(staffFrac * 100)}% ${upCost}`;
     } else if (type === 4) { // Quarry
         let upCost = lvl < 5 ? `(up ${15 * lvl * 1.5}g)` : "(max)";
         detail = `🧱 Produces Stone @ ${Math.round(staffFrac * 100)}% ${upCost}`;
@@ -89,12 +89,17 @@ function _impInfo(raw, cell, rivers, ter, ownerCity, goodEff) {
         detail = `🚢 +${s(lvl * 2.0 * staffFrac)} Trade (max +${s(lvl * 2.0)}) ${upCost}`;
     } else if (type === 9) { // Smithery
         let upCost = lvl < 5 ? `(up ${15 * lvl * 1.5}g)` : "(max)";
-        detail = `🛡️ Refines up to ${s(lvl * 2.0 * staffFrac)} Ore → Metal (max ${s(lvl * 2.0)}) ${upCost}`;
+        detail = `🔶 Refines up to ${s(lvl * 2.0 * staffFrac)} Copper Ore → Copper (max ${s(lvl * 2.0)}) ${upCost}`;
     } else if (type === 10) { // Fishery
-        const foodMax = (1.0 + lvl * 0.8) * coast;
-        const food = s(foodMax * staffFrac);
+        const grainMax = (1.0 + lvl * 0.8) * coast;
+        const grain = s(grainMax * staffFrac);
         let upCost = lvl < 5 ? "upgradable" : "(max)";
-        detail = `🐟 ${food} food + ${s(lvl * 0.8 * staffFrac)} trade (max ${s(foodMax)}f) ${upCost}`;
+        detail = `🐟 ${grain} grain + ${s(lvl * 0.8 * staffFrac)} trade (max ${s(grainMax)}g) ${upCost}`;
+    } else if (type === 11) { // Cotton Farm
+        const fabricMax = (1.2 + lvl * 0.75) * riv * coast;
+        const fabric = s(fabricMax * staffFrac);
+        let upCost = lvl < 10 ? `(up ${15 * lvl * 1.8}g)` : "(max)";
+        detail = `🧵 ${fabric} fabric (max ${s(fabricMax)}) ${upCost}`;
     }
 
     // Local regional efficiency for the improvement's primary good (per employee unit).
@@ -178,7 +183,7 @@ function _drawRiverRoad(ctx, seg, riverLw) {
 // ── Main render ───────────────────────────────────────────────────────────────
 
 export function renderFrame(ctx, mapData, state, opts = {}) {
-    const { showRes = true, mapMode = "terrain", resourceGood = "food", tick = 0, zoom = 1, selectedCity = null } = opts;
+    const { showRes = true, mapMode = "terrain", resourceGood = "grain", tick = 0, zoom = 1, selectedCity = null } = opts;
     const { ter, res, rivers, terrain_colors, imp_colors, good_efficiency } = mapData;
     let { civs = [], wars = [], impr = [] } = state;
 
@@ -887,14 +892,15 @@ export function getCellInfo(mapData, state, cellIndex) {
     let cityStats = null;
     if (city) {
         const tiles = city.tiles || [];
-        let farms = 0, mines = 0, lumber = 0, pastures = 0, resCount = 0;
-        let quarries = 0, windmills = 0, ports = 0, smitheries = 0, forts = 0;
+        let farms = 0, cotton = 0, mines = 0, lumber = 0, pastures = 0, resCount = 0;
+        let quarries = 0, windmills = 0, ports = 0, fisheries = 0, smitheries = 0, forts = 0;
         let farmLvls = 0, mineLvls = 0;
         for (const t of tiles) {
             const raw = impr[t] || 0;
             const it = impType(raw);
             const lvl = impLevel(raw);
             if (it === 1) { farms++; farmLvls += lvl; }
+            else if (it === 11) cotton++;
             else if (it === 2) { mines++; mineLvls += lvl; }
             else if (it === 3) lumber++;
             else if (it === 4) quarries++;
@@ -902,13 +908,14 @@ export function getCellInfo(mapData, state, cellIndex) {
             else if (it === 6) windmills++;
             else if (it === 7) forts++;
             else if (it === 8) ports++;
+            else if (it === 10) fisheries++;
             else if (it === 9) smitheries++;
             
             if (res[t]) resCount++;
         }
         const avgFarmLvl = farms ? (farmLvls / farms * 10 | 0) / 10 : 0;
         const avgMineLvl = mines ? (mineLvls / mines * 10 | 0) / 10 : 0;
-        cityStats = { farms, mines, lumber, pastures, quarries, windmills, ports, smitheries, forts, resCount, tileCount: tiles.length, avgFarmLvl, avgMineLvl };
+        cityStats = { farms, cotton, mines, lumber, pastures, quarries, windmills, ports, fisheries, smitheries, forts, resCount, tileCount: tiles.length, avgFarmLvl, avgMineLvl };
     }
 
     // Collect any armies sitting on this cell across all wars
@@ -1011,6 +1018,10 @@ export function getCellInfo(mapData, state, cellIndex) {
             income_misc: city.income_misc || 0,
             income_total: city.income_total || 0,
             income_per_person: city.income_per_person || 0,
+            buildings: city.buildings || {},
+            building_staffing: city.building_staffing || {},
+            building_profit: city.building_profit || {},
+            building_details: city.building_details || [],
             attractiveness: city.attractiveness ?? 1.0,
             net_migration: city.net_migration ?? 0,
         } : null,

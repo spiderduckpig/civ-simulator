@@ -30,6 +30,8 @@ const nationList   = document.getElementById("nation-list");
 const fallenList   = document.getElementById("fallen-list");
 const civDetail    = document.getElementById("civ-detail");
 const eventLog     = document.getElementById("event-log");
+const cityPanel    = document.getElementById("city-panel");
+const cityPanelBody = document.getElementById("city-panel-body");
 const settingsPanel = document.getElementById("settings-panel");
 const btnSettings  = document.getElementById("btn-settings");
 const btnDiplo     = document.getElementById("btn-diplo");
@@ -46,6 +48,8 @@ let zoom       = 1;
 let viewOffset = { x: 0, y: 0 };
 let isDragging = false;
 let dragStart  = { x: 0, y: 0 };
+let dragOrigin = { x: 0, y: 0 };
+let dragMoved  = false;
 let selectedId   = null;
 let selectedCity = null;  // city object when a city cell is clicked
 let hoveredCell  = -1;    // cell index under mouse, for live tooltip updates
@@ -149,6 +153,8 @@ function updateUI() {
     nationList.innerHTML = sorted.map(civ => {
         const atWar = wars.some(w => w.att === civ.id || w.def_id === civ.id);
         const sel   = civ.id === selectedId;
+        const econ = (civ.cities || []).reduce((sum, city) => sum + (city.income_total || 0), 0);
+        const econLabel = econ >= 0 ? `+${econ.toFixed(1)}` : econ.toFixed(1);
         return `
         <div class="civ-row${sel ? " selected" : ""}" data-id="${civ.id}">
             <div class="civ-row-top">
@@ -157,7 +163,7 @@ function updateUI() {
                 ${atWar ? '<span class="war-badge">WAR</span>' : ""}
                 <span class="civ-size">${civ.territory.length}</span>
             </div>
-            <div class="civ-sub">${civ.cities.length}c · ${civ.population|0}p · 💰${civ.gold|0}</div>
+            <div class="civ-sub">${civ.cities.length}c · ${civ.population|0}p · 📈${econLabel}/t</div>
         </div>`;
     }).join("");
 
@@ -171,6 +177,19 @@ function updateUI() {
     // Event log
     const logLines = [...gameState.log].reverse().slice(0, 10);
     eventLog.innerHTML = logLines.map(e => `<div class="log-line">${e}</div>`).join("");
+
+    // Refresh selected city from latest state snapshot.
+    if (selectedCity && selectedId !== null) {
+        const civSel = gameState.civs.find(c => c.id === selectedId);
+        if (civSel) {
+            const fresh = civSel.cities.find(c => c.cell === selectedCity.cell);
+            selectedCity = fresh || null;
+        } else {
+            selectedCity = null;
+        }
+    }
+
+    renderSelectedCityPanel(selectedCity);
 
     // Civ detail panel
     if (selectedId !== null) {
@@ -209,6 +228,98 @@ function updateUI() {
     });
 }
 
+function renderSelectedCityPanel(city) {
+    if (!city) {
+        cityPanel.style.display = "none";
+        cityPanelBody.innerHTML = "";
+        return;
+    }
+
+    cityPanel.style.display = "flex";
+
+    const tags = [];
+    if (city.is_capital) tags.push("★ Capital");
+    if (city.river_mouth) tags.push("🏞 River Mouth");
+    else if (city.near_river) tags.push("〰 River");
+    if (city.coastal) tags.push("⚓ Coast");
+
+    const goods = ["grain", "bread", "fabric", "clothes", "lumber", "copper_ore", "stone", "copper"];
+    const icons = {grain:"🌾", bread:"🍞", fabric:"🧵", clothes:"👕", lumber:"🪵", copper_ore:"⛏", stone:"🧱", copper:"🔶"};
+
+    const goodsRows = goods.map(g => {
+        const s = city.supply[g] || 0;
+        const d = city.demand[g] || 0;
+        const p = city.prices[g] || 1.0;
+        const c = p < 1.0 ? "#3fb950" : (p > 2.0 ? "#f85149" : "#f0c040");
+
+        // Match tooltip trade summary: aggregate by good across all partners.
+        let tradeLine = "";
+        const trades = city.last_trades?.[g];
+        if (trades && trades.length > 0) {
+            let totalVol = 0;
+            let priceSum = 0;
+            for (const [vol, , tp] of trades) {
+                totalVol += vol;
+                priceSum += tp * Math.abs(vol);
+            }
+            const absVol = Math.abs(totalVol);
+            if (absVol >= 0.05) {
+                const avgP = priceSum / Math.max(0.001, trades.reduce((a, [v]) => a + Math.abs(v), 0));
+                const type = totalVol > 0 ? "Import" : "Export";
+                const tColor = totalVol > 0 ? "#58a6ff" : "#d299ff";
+                const partners = trades.length > 1 ? `×${trades.length}` : "";
+                tradeLine = `<span style="color:${tColor}; margin-left:4px; font-size:9px">[${type}${partners} ${absVol.toFixed(1)} @ ₿${avgP.toFixed(2)}]</span>`;
+            }
+        }
+
+        return `<div style="display:flex;justify-content:space-between;font-size:10px"><span>${icons[g]} ${g.toUpperCase()}${tradeLine}</span><span>${s.toFixed(1)} / ${d.toFixed(1)} · <span style="color:${c}">₿${p.toFixed(2)}</span></span></div>`;
+    }).join("");
+
+    const bDetails = city.building_details || [];
+    const buildingRows = bDetails.length
+        ? bDetails.map(b => {
+            const pColor = (b.profit || 0) >= 0 ? "#3fb950" : "#f85149";
+            const inTxt = b.inputs ? Object.entries(b.inputs).map(([g, a]) => `${a} ${g}`).join(", ") : "-";
+            const outTxt = b.outputs ? Object.entries(b.outputs).map(([g, a]) => `${a} ${g}`).join(", ") : "-";
+            return `<div style="margin-bottom:4px">
+                <div style="display:flex;justify-content:space-between"><span>🏭 ${b.name} Lv.${b.level} · 👥 ${b.staffed}/${b.level}</span><span style="color:${pColor}">₿${(b.profit || 0).toFixed(2)}/t</span></div>
+                <div style="font-size:9px;color:#8b949e">in: ${inTxt || "-"} · out: ${outTxt || "-"}</div>
+            </div>`;
+        }).join("")
+        : `<div style="font-size:9px;color:#8b949e">No city buildings</div>`;
+
+    const workforce = city.workforce || 0;
+    const employed = city.employed_pop || 0;
+    const unemployed = city.unemployed_pop || 0;
+    const net = city.income_total || 0;
+    const netColor = net >= 0 ? "#3fb950" : "#f85149";
+    const pull = city.attractiveness ?? 1.0;
+    const netMig = city.net_migration ?? 0.0;
+    const pullColor = pull > 1.3 ? "#3fb950" : (pull < 0.7 ? "#f85149" : "#f0c040");
+    const migColor = netMig > 0.05 ? "#3fb950" : (netMig < -0.05 ? "#f85149" : "#8b949e");
+    const migArrow = netMig > 0.05 ? "↑" : (netMig < -0.05 ? "↓" : "·");
+    const migLabel = netMig > 0.05 ? `+${netMig.toFixed(1)} incoming` : (netMig < -0.05 ? `${netMig.toFixed(1)} leaving` : "steady");
+
+    cityPanelBody.innerHTML = `
+        <div class="city-panel-title">🏘 ${city.name}</div>
+        <div class="city-panel-sub">${tags.join(" · ") || "City"}</div>
+        <div>👥 Pop ${city.population|0} · 💰 Gold ${city.gold|0}</div>
+        <div>💼 Workforce ${workforce * 20} · Employed ${employed} · Unemployed ${unemployed}</div>
+        <div>📈 Net Income <span style="color:${netColor}">₿${net.toFixed(2)}/t</span> · Per Person ₿${(city.income_per_person || 0).toFixed(3)}</div>
+        <div>🧭 Pull <span style="color:${pullColor}">${pull.toFixed(2)}</span> · <span style="color:${migColor}">${migArrow} ${migLabel}</span></div>
+
+        <div class="city-panel-section">
+            <div class="city-panel-section-label">Local Market (Supply / Demand · Price)</div>
+            ${goodsRows}
+        </div>
+
+        <div class="city-panel-section">
+            <div class="city-panel-section-label">Buildings</div>
+            ${buildingRows}
+        </div>
+    `;
+}
+
 function renderCivDetail(civ, wars) {
     if (!civ) { civDetail.innerHTML = ""; return; }
     const myWars = wars.filter(w => w.att === civ.id || w.def_id === civ.id);
@@ -227,7 +338,7 @@ function renderCivDetail(civ, wars) {
             const isSel = selectedCity && selectedCity.cell === c.cell;
             return `<div class="detail-city${isSel ? " city-selected" : ""}" data-city-cell="${c.cell}">
                 ${c.is_capital ? "★" : "•"} <b>${c.name}</b>
-                <span>${c.population|0}p · 💰${c.gold|0} · 🍞${c.supply["food"]|0}/${c.demand["food"]|0}
+                <span>${c.population|0}p · 💰${c.gold|0} · 🌾${c.supply["grain"]|0}/${c.demand["grain"]|0}
                 ${c.near_river ? "〰" : ""}${c.coastal ? "⚓" : ""}</span>
             </div>`;
         })
@@ -256,11 +367,11 @@ function renderCivDetail(civ, wars) {
         <div class="detail-stats">
             <div>👑 Leader: ${civ.leader}</div>
             <div>👥 Pop: ${civ.population|0} · ⚔ Military: ${civ.military|0} · 📐 Land: ${civ.territory.length}</div>
-            <div>💰 Gold: ${civ.gold|0} · 🍞 Food Out: ${civ.farm_output|0}</div>
+            <div>💰 Gold: ${civ.gold|0} · 🌾 Grain Out: ${civ.farm_output|0}</div>
             <div>🔬 Tech: ${civ.tech.toFixed(1)} · 🎭 Culture: ${civ.culture.toFixed(1)}</div>
             <div>🛡 Integrity: <span style="color:${intColor}">${(civ.integrity*100)|0}%</span> · 💢 Aggressiveness: <span style="color:${aggrColor}">${(aggr*100)|0}%</span></div>
             <div>⚡ Power: ${civ.power|0}</div>
-            <div>⛏ Ore/Metal: ${civ.ore_output|0}/${civ.metal_output|0} · 🧱 Stone: ${civ.stone_output|0} · 🛤 Roads: ${civ.roads.length}</div>
+            <div>⛏ Copper Ore/Copper: ${civ.ore_output|0}/${civ.metal_output|0} · 🧱 Stone: ${civ.stone_output|0} · 🛤 Roads: ${civ.roads.length}</div>
             ${allyNames ? `<div>🤝 Allies: ${allyNames}</div>` : ""}
         </div>
         ${cities ? `<div class="detail-section-label">CITIES (${civ.cities.length})</div>${cities}` : ""}
@@ -405,6 +516,8 @@ canvas.addEventListener("wheel", e => {
 canvas.addEventListener("mousedown", e => {
     isDragging = true;
     dragStart  = { x: e.clientX, y: e.clientY };
+    dragOrigin = { x: e.clientX, y: e.clientY };
+    dragMoved = false;
 });
 canvas.addEventListener("mouseup",    () => isDragging = false);
 canvas.addEventListener("mouseleave", () => { isDragging = false; tooltip.style.display = "none"; hoveredCell = -1; });
@@ -412,6 +525,8 @@ canvas.addEventListener("mouseleave", () => { isDragging = false; tooltip.style.
 canvas.addEventListener("mousemove", e => {
     const rect = canvas.getBoundingClientRect();
     if (isDragging) {
+        const moved = Math.hypot(e.clientX - dragOrigin.x, e.clientY - dragOrigin.y);
+        if (moved >= 4) dragMoved = true;
         viewOffset.x += e.clientX - dragStart.x;
         viewOffset.y += e.clientY - dragStart.y;
         dragStart = { x: e.clientX, y: e.clientY };
@@ -432,7 +547,10 @@ canvas.addEventListener("mousemove", e => {
 });
 
 canvas.addEventListener("click", e => {
-    if (isDragging) return;
+    if (isDragging || dragMoved) {
+        dragMoved = false;
+        return;
+    }
     const rect = canvas.getBoundingClientRect();
     const mx  = (e.clientX - rect.left - viewOffset.x) / zoom;
     const my  = (e.clientY - rect.top  - viewOffset.y) / zoom;
@@ -506,8 +624,8 @@ function showTooltip(x, y, info) {
         const incColor = c.income_total > 0 ? "#3fb950" : c.income_total < 0 ? "#f85149" : "#8b949e";
         lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Income (gold/tick)</div>`);
         lines.push(`<div style="font-size:10px">Net <span style="color:${incColor}">₿${c.income_total.toFixed(2)}</span> · Per person <span style="color:${incColor}">₿${c.income_per_person.toFixed(3)}</span></div>`);
-        const goodsIn = ["food", "lumber", "ore", "stone", "metal"];
-        const icons2 = {food:"🍞", lumber:"🪵", ore:"⚙", stone:"🧱", metal:"🗡"};
+        const goodsIn = ["grain", "bread", "fabric", "clothes", "lumber", "copper_ore", "stone", "copper"];
+        const icons2 = {grain:"🌾", bread:"🍞", fabric:"🧵", clothes:"👕", lumber:"🪵", copper_ore:"⛏", stone:"🧱", copper:"🔶"};
         for (const g of goodsIn) {
             const dom = c.income_domestic[g] || 0;
             const exp = c.income_export[g] || 0;
@@ -528,8 +646,8 @@ function showTooltip(x, y, info) {
             lines.push(`<div style="font-size:9px">✦ Gold resource +${c.income_misc.toFixed(1)}</div>`);
         }
 
-        const goods = ["food", "lumber", "ore", "stone", "metal"];
-        const icons = {food:"🍞", lumber:"🪵", ore:"⚙", stone:"🧱", metal:"🗡"};
+        const goods = ["grain", "bread", "fabric", "clothes", "lumber", "copper_ore", "stone", "copper"];
+        const icons = {grain:"🌾", bread:"🍞", fabric:"🧵", clothes:"👕", lumber:"🪵", copper_ore:"⛏", stone:"🧱", copper:"🔶"};
         
         lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Local Market (Supply / Demand · Price)</div>`);
 
@@ -569,6 +687,7 @@ function showTooltip(x, y, info) {
         if (s) {
             const imps = [];
             if (s.farms)      imps.push(`🌾 ${s.farms} farms${s.avgFarmLvl > 1 ? ` (avg Lv.${s.avgFarmLvl})` : ""}`);
+            if (s.cotton)     imps.push(`🧵 ${s.cotton} cotton farms`);
             if (s.mines)      imps.push(`⛏ ${s.mines} mines${s.avgMineLvl > 1 ? ` (avg Lv.${s.avgMineLvl})` : ""}`);
             if (s.lumber)     imps.push(`🌲 ${s.lumber} lumber`);
             if (s.pastures)   imps.push(`🐄 ${s.pastures} pastures`);
@@ -585,13 +704,39 @@ function showTooltip(x, y, info) {
             const fValue = c.focus | 0;
 
             lines.push(`<div style="color:#8b949e">Focus: <span style="color:${focusColor[fValue]}">${focusEmoji[fValue]} ${focusMap[fValue]}</span></div>`);
-            lines.push(`<div style="color:#8b949e">⚙ Ore ${c.city_ore}/${c.city_ore_total} · 🧱 Stone ${c.city_stone}/${c.city_stone_total} · 🗡 Metal ${c.city_metal}/${c.city_metal_total}</div>`);
+            lines.push(`<div style="color:#8b949e">⛏ Copper Ore ${c.city_ore}/${c.city_ore_total} · 🧱 Stone ${c.city_stone}/${c.city_stone_total} · 🔶 Copper ${c.city_metal}/${c.city_metal_total}</div>`);
 
             lines.push(`<div style="color:#8b949e">📐 ${s.tileCount} tiles · 💎 ${s.resCount} resources</div>`);
             if (imps.length) {
                 lines.push(`<div style="color:#8b949e">${imps.slice(0, 3).join(" · ")}</div>`);
                 if (imps.length > 3) lines.push(`<div style="color:#8b949e">${imps.slice(3, 6).join(" · ")}</div>`);
                 if (imps.length > 6) lines.push(`<div style="color:#8b949e">${imps.slice(6).join(" · ")}</div>`);
+            }
+        }
+
+        // ── City buildings ───────────────────────────────────────────
+        const bLevels = c.buildings || {};
+        const bStaff  = c.building_staffing || {};
+        const bProfit = c.building_profit || {};
+        const bDetails = c.building_details || [];
+        const bKeys = Object.keys(bLevels).filter(k => (bLevels[k] || 0) > 0);
+        if (bKeys.length) {
+            lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">City Buildings</div>`);
+            for (const key of bKeys) {
+                const d = bDetails.find(x => x.key === key) || null;
+                const lvl = d ? (d.level || 0) : (bLevels[key] || 0);
+                const staffed = d ? (d.staffed || 0) : Math.min(lvl, bStaff[key] || 0);
+                const prof = d ? (d.profit || 0) : (bProfit[key] || 0);
+                const pColor = prof >= 0 ? "#3fb950" : "#f85149";
+                const name = d?.name || key;
+                const inTxt = d && d.inputs
+                    ? Object.entries(d.inputs).map(([g, a]) => `${a} ${g}`).join(", ")
+                    : "-";
+                const outTxt = d && d.outputs
+                    ? Object.entries(d.outputs).map(([g, a]) => `${a} ${g}`).join(", ")
+                    : "-";
+                lines.push(`<div style="font-size:10px; display:flex; justify-content:space-between"><span>🏭 ${name} Lv.${lvl} · 👥 ${staffed}/${lvl}</span><span style="color:${pColor}">₿${prof.toFixed(2)}/t</span></div>`);
+                lines.push(`<div style="font-size:9px; color:#8b949e">in: ${inTxt || "-"} · out: ${outTxt || "-"}</div>`);
             }
         }
     }

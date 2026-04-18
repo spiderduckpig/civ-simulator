@@ -18,7 +18,6 @@ from .improvements import (
     best_improvement, advanced_structure_for,
 )
 from .helpers import neighbors
-from .buildings import BUILDING_TYPES, get_building_type
 from .models import City, Civ
 
 
@@ -72,81 +71,15 @@ def _try_buy(city: City, cost: float) -> bool:
     return True
 
 
-def _building_upgrade_cost(city: City, bkey: str, current_level: int) -> float:
-    """Gold cost for city-center building construction/upgrades.
-
-    Building recipes store a *set* of resources; we price that set against
-    the local market and combine it with a level-scaling base cost.
-    """
-    b = get_building_type(bkey)
-    if b is None:
-        return float("inf")
-    level_mult = max(1.0, current_level + 1) ** 1.5
-    base_gold = 24.0 * level_mult
-    mat_cost = 0.0
-    for good in b.cost_resources:
-        mat_cost += city.prices.get(good, BASE_PRICES.get(good, 1.0)) * 4.0 * level_mult
-    return base_gold + mat_cost
-
-
-def _try_build_city_buildings(city: City) -> bool:
-    """Market-driven city-building investment.
-
-    Evaluates all configured building types and upgrades the most profitable
-    candidate if market conditions justify the capex.
-    """
-    if not hasattr(city, "buildings") or city.buildings is None:
-        city.buildings = {}
-    if not hasattr(city, "building_staffing") or city.building_staffing is None:
-        city.building_staffing = {}
-
-    # Pick best positive-margin building among those not at max level.
-    best_key: Optional[str] = None
-    best_margin = 0.0
-    for key, b in BUILDING_TYPES.items():
-        cur_lvl = int(city.buildings.get(key, 0))
-        if cur_lvl >= b.max_level:
-            continue
-
-        out_v = 0.0
-        for g, amt in b.outputs.items():
-            out_v += amt * city.prices.get(g, BASE_PRICES.get(g, 1.0))
-        in_v = 0.0
-        for g, amt in b.inputs.items():
-            in_v += amt * city.prices.get(g, BASE_PRICES.get(g, 1.0))
-        margin = out_v - in_v
-        if margin > best_margin:
-            best_margin = margin
-            best_key = key
-
-    if best_key is None or best_margin <= 0.0:
-        return False
-
-    # Require either unemployment to absorb, or strong enough margin to pull
-    # workers away from existing lower-profit jobs.
-    unemployed = getattr(city, "unemployed_pop", 0)
-    if unemployed < N_EMPLOYEES_PER_LEVEL and best_margin < 1.5:
-        return False
-
-    cur_lvl = int(city.buildings.get(best_key, 0))
-    cost = _building_upgrade_cost(city, best_key, cur_lvl)
-    if not _try_buy(city, cost):
-        return False
-
-    city.buildings[best_key] = cur_lvl + 1
-    return True
-
-
 # ── Profitability hint ────────────────────────────────────────────────────
 # Producer imp for each tradable good. Used to bias "what to build next"
 # toward whichever output is currently scarce (high local price).
 _GOOD_TO_PRODUCER = {
-    "grain":  IMP.FARM,
-    "fabric": IMP.COTTON,
+    "food":   IMP.FARM,
     "lumber": IMP.LUMBER,
-    "copper_ore": IMP.MINE,
+    "ore":    IMP.MINE,
     "stone":  IMP.QUARRY,
-    "copper": IMP.SMITHERY,
+    "metal":  IMP.SMITHERY,
 }
 
 # Minimum price-to-base ratio before we consider a good "scarce enough to
@@ -215,13 +148,13 @@ def _pick_upgrade_candidate(
 
 def _focus_preferred_types(focus: int) -> set:
     if focus == FOCUS.FARMING:
-        return {IMP.FARM, IMP.COTTON, IMP.WINDMILL, IMP.FISHERY}
+        return {IMP.FARM, IMP.WINDMILL, IMP.FISHERY}
     if focus == FOCUS.MINING:
         return {IMP.MINE, IMP.QUARRY, IMP.SMITHERY}
     if focus == FOCUS.DEFENSE:
         return {IMP.FORT, IMP.FARM}
     if focus == FOCUS.TRADE:
-        return {IMP.PORT, IMP.FISHERY, IMP.FARM, IMP.COTTON}
+        return {IMP.PORT, IMP.FISHERY, IMP.FARM}
     return {IMP.FARM}
 
 
@@ -234,8 +167,8 @@ def _focus_transition(
     pop = max(1.0, city.population)
     
     # Use supply dict for signals
-    grain = city.supply.get("grain", 0.0) + city.supply.get("bread", 0.0)
-    copper_ore = city.supply.get("copper_ore", 0.0)
+    food = city.supply.get("food", 0.0)
+    ore  = city.supply.get("ore", 0.0)
     stone = city.supply.get("stone", 0.0)
     
     # Trade potential is now more abstract but we can use gold income or 
@@ -244,9 +177,9 @@ def _focus_transition(
     coastal = city.coastal
 
     # Scale-free evidence signals (all fractions of population, not raw numbers)
-    food_deficit = grain < pop * 0.12
-    food_surplus = grain > pop * 0.25
-    ore_rich     = (copper_ore + stone) > pop * 0.05
+    food_deficit = food < pop * 0.12
+    food_surplus = food > pop * 0.25
+    ore_rich     = (ore + stone) > pop * 0.05
     trade_rich   = trade > pop * 0.25
 
     # Build transition weights from current state f.
@@ -349,7 +282,7 @@ def _place_advanced_structure(
         return False
     random.shuffle(empties)
 
-    # Smitheries are only useful if the city has copper ore coming in.
+    # Smitheries are only useful if the city has ore coming in.
     has_ore_potential = any(
         0 <= t < N and (
             imp_type(impr[t]) == IMP.MINE or
@@ -357,9 +290,9 @@ def _place_advanced_structure(
         )
         for t in tiles
     )
-    # Check current copper ore availability too
-    current_production_ore = city.supply.get("copper_ore", 0.0)
-    current_imports_ore = city.net_imports.get("copper_ore", 0.0)
+    # Check current ore availability too
+    current_production_ore = city.supply.get("ore", 0.0)
+    current_imports_ore = city.net_imports.get("ore", 0.0)
     has_ore = current_production_ore > 0.1 or current_imports_ore > 0.1 or has_ore_potential
 
     focus = city.focus
@@ -660,11 +593,6 @@ def tick_city_development(
         for _ in range(budget):
             if not _try_one_action(city, goal_imp, impr):
                 break
-            any_built = True
-
-        # City-center buildings (factories etc.) invest off market signals.
-        # Separate from tile improvements so we can grow urban industry.
-        if _try_build_city_buildings(city):
             any_built = True
 
     # Re-run employment so workers move into buildings placed this tick.

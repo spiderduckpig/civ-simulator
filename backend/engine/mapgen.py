@@ -244,7 +244,7 @@ def gen_map(seed: int) -> MapData:
     impr   = [IMP.NONE] * N
 
     # Per-good efficiency maps: biome × low-frequency regional noise.
-    good_efficiency = gen_efficiency_maps(ter, rivers, seed)
+    good_efficiency = gen_efficiency_maps(ter, rivers, seed, tm)
 
     return MapData(
         hm=hm,

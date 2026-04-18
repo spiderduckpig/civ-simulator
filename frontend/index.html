@@ -88,6 +88,52 @@
     .zbtn:hover { filter: brightness(1.3); }
 
     /* ── Sidebar ───────────────────────────────────────────────── */
+    #city-panel {
+      width: 300px; flex-shrink: 0;
+      background: #11161d; border-left: 1px solid #30363d;
+      display: none; flex-direction: column; overflow: hidden;
+    }
+    #city-panel-header {
+      padding: 6px 8px;
+      border-bottom: 1px solid #30363d;
+      background: #161b22;
+      color: #8b949e;
+      font-size: 8px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    #city-panel-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+      font-size: 10px;
+      line-height: 1.45;
+      color: #c9d1d9;
+      background: #0d1117;
+    }
+    .city-panel-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: #e6edf3;
+      margin-bottom: 4px;
+    }
+    .city-panel-sub {
+      color: #8b949e;
+      font-size: 9px;
+      margin-bottom: 6px;
+    }
+    .city-panel-section {
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px solid #30363d;
+    }
+    .city-panel-section-label {
+      color: #8b949e;
+      font-size: 9px;
+      margin-bottom: 3px;
+    }
+
     #sidebar {
       width: 250px; flex-shrink: 0;
       background: #161b22; border-left: 1px solid #30363d;
@@ -248,11 +294,13 @@
   <div class="spacer"></div>
   <button id="btn-mapmode" class="btn">Ter</button>
   <select id="sel-resource-good" style="display:none; font-size:8px; padding:2px 3px;">
-    <option value="food">🍞 Food</option>
+    <option value="grain">🌾 Grain</option>
+    <option value="bread">🍞 Bread</option>
+    <option value="fabric">🧵 Fabric</option>
     <option value="lumber">🪵 Lumber</option>
-    <option value="ore">⛏ Ore</option>
+    <option value="copper_ore">⛏ Copper Ore</option>
     <option value="stone">🧱 Stone</option>
-    <option value="metal">🗡 Metal</option>
+    <option value="copper">🔶 Copper</option>
   </select>
   <button id="btn-play"    class="btn btn-green">▶</button>
   <select id="sel-speed">
@@ -300,6 +348,12 @@
       <button class="zbtn" id="btn-zoom-out">−</button>
       <button class="zbtn" id="btn-zoom-reset">⌂</button>
     </div>
+  </div>
+
+  <!-- Selected city panel (appears only for clicked city) -->
+  <div id="city-panel">
+    <div id="city-panel-header">Selected City</div>
+    <div id="city-panel-body"></div>
   </div>
 
   <!-- Sidebar -->

@@ -51,6 +51,7 @@ def downgrade_imp(raw: int) -> int:
 # they scale further than other types.
 MAX_LEVELS = {
     IMP.FARM:     20,
+    IMP.COTTON:   10,
     IMP.MINE:     5,
     IMP.QUARRY:   5,
     IMP.LUMBER:   5,
@@ -65,7 +66,7 @@ MAX_LEVELS = {
 # Types the per-city investment loop is allowed to upgrade. Lumber and
 # pasture are single-level flavour improvements right now.
 UPGRADABLE_TYPES = {
-    IMP.FARM, IMP.MINE, IMP.QUARRY, IMP.WINDMILL,
+    IMP.FARM, IMP.COTTON, IMP.MINE, IMP.QUARRY, IMP.WINDMILL,
     IMP.FORT, IMP.PORT, IMP.SMITHERY, IMP.FISHERY,
 }
 
@@ -141,6 +142,13 @@ def best_improvement(
         elif focus == FOCUS.MINING: fw = 0.5
         elif focus == FOCUS.TRADE:  fw = 1.0
         weights[IMP.FARM] = fw
+
+        # Cotton farms are farm-like but produce textile goods instead of food.
+        cw = 1.4
+        if focus == FOCUS.FARMING: cw = 2.6
+        elif focus == FOCUS.MINING: cw = 0.3
+        elif focus == FOCUS.TRADE:  cw = 2.2
+        weights[IMP.COTTON] = cw
 
     # Mines where resources justify it
     if r in ("iron", "stone", "gold", "gems"):

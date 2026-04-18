@@ -59,7 +59,7 @@ TERRAIN_NAMES = {
 
 RESOURCE_ICONS = {
     "iron": "⛏", "gold": "✦", "horses": "🐎", "wheat": "🌾",
-    "fish": "🐟", "gems": "💎", "wood": "🪵", "stone": "🪨",
+    "fish": "🐟", "gems": "💎", "wood": "🪵", "stone": "🪨", "fabric": "🧵",
     "spices": "🌶", "ivory": "🦷",
 }
 
@@ -67,7 +67,7 @@ RESOURCE_ICONS = {
 class IMP:
     NONE     = 0
     FARM     = 1
-    MINE     = 2  # Produces Ore
+    MINE     = 2  # Produces Copper Ore
     LUMBER   = 3
     QUARRY   = 4  # Produces Stone
     PASTURE  = 5
@@ -75,7 +75,8 @@ class IMP:
     FORT     = 7
     PORT     = 8
     SMITHERY = 9
-    FISHERY  = 10  # Coastal food + modest trade
+    FISHERY  = 10  # Coastal grain + modest trade
+    COTTON   = 11  # Produces fabric
 
 # Bit-packed encoding: low 5 bits = type (0-31), remaining bits = level-1.
 # Use helpers in engine.improvements to pack/unpack — never touch bits directly.
@@ -94,6 +95,7 @@ IMP_COLORS = {
     IMP.PORT:     "#336699",
     IMP.SMITHERY: "#b84422",
     IMP.FISHERY:  "#4aaed8",
+    IMP.COTTON:   "#d8e3a5",
 }
 
 IMP_NAMES = {
@@ -108,6 +110,7 @@ IMP_NAMES = {
     IMP.PORT:     "Port",
     IMP.SMITHERY: "Smithery",
     IMP.FISHERY:  "Fishery",
+    IMP.COTTON:   "Cotton Farm",
 }
 
 # City focus — what the city prioritises. Biases its build queue and the
@@ -189,13 +192,16 @@ FOCUS_HMM_PERIOD        = 12     # how often a city reconsiders its focus
 N_EMPLOYEES_PER_LEVEL   = 10
 
 # ── Economy ──
-GOODS = ["food", "lumber", "ore", "stone", "metal"]
+GOODS = ["grain", "bread", "lumber", "copper_ore", "stone", "copper", "fabric", "clothes"]
 BASE_PRICES = {
-    "food":   1.0,
+    "grain":  1.0,
+    "bread":  2.2,
     "lumber": 2.0,
-    "ore":    3.0,
+    "copper_ore": 3.0,
     "stone":  6.0,
-    "metal":  10.0,
+    "copper": 9.0,
+    "fabric": 4.0,
+    "clothes": 8.0,
 }
 
 # Trade / Arbitrage constants

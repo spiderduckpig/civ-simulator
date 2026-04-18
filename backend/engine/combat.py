@@ -259,7 +259,7 @@ def _update_supply(army: Army, impr: list, om: list) -> None:
 
     raw = impr[cur] if 0 <= cur < N else 0
     it = imp_type(raw)
-    if it in (IMP.FARM, IMP.PASTURE, IMP.FISHERY):
+    if it in (IMP.FARM, IMP.COTTON, IMP.PASTURE, IMP.FISHERY):
         army.supply = min(100.0, army.supply + ARMY_SUPPLY_REPLEN)
 
     army.supply = max(0.0, army.supply - decay)

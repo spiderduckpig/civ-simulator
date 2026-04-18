@@ -18,7 +18,6 @@ import random
 from typing import Callable
 
 from .constants import N, IMP, FOCUS, N_EMPLOYEES_PER_LEVEL, BASE_PRICES
-from .buildings import BUILDING_TYPES
 from .improvements import imp_type, imp_level
 from .helpers import cell_on_river
 from .mapgen import cell_coastal
@@ -28,27 +27,27 @@ from .mapgen import cell_coastal
 # consume metal upkeep but not population.
 STAFFABLE_TYPES = frozenset({
     IMP.FARM, IMP.MINE, IMP.LUMBER, IMP.QUARRY, IMP.PASTURE,
-    IMP.WINDMILL, IMP.PORT, IMP.SMITHERY, IMP.FISHERY, IMP.COTTON,
+    IMP.WINDMILL, IMP.PORT, IMP.SMITHERY, IMP.FISHERY,
 })
 
 # Types whose profit-per-worker can be priced directly from output × price.
 # Windmill/pasture/port create value through neighbour bonuses or untracked
 # flows; they keep their existing staffing during reallocation.
 DIRECT_PRODUCER_TYPES = frozenset({
-    IMP.FARM, IMP.FISHERY, IMP.COTTON, IMP.MINE, IMP.QUARRY, IMP.LUMBER, IMP.SMITHERY,
+    IMP.FARM, IMP.FISHERY, IMP.MINE, IMP.QUARRY, IMP.LUMBER, IMP.SMITHERY,
 })
 
 
 def _focus_weight(imp_t: int, focus: int) -> float:
     """Hiring preference: focus-matched types get ~4× baseline."""
     if focus == FOCUS.FARMING:
-        if imp_t in (IMP.FARM, IMP.COTTON, IMP.WINDMILL, IMP.FISHERY, IMP.PASTURE):
+        if imp_t in (IMP.FARM, IMP.WINDMILL, IMP.FISHERY, IMP.PASTURE):
             return 4.0
     elif focus == FOCUS.MINING:
         if imp_t in (IMP.MINE, IMP.QUARRY, IMP.SMITHERY):
             return 4.0
     elif focus == FOCUS.TRADE:
-        if imp_t in (IMP.PORT, IMP.FISHERY, IMP.FARM, IMP.COTTON):
+        if imp_t in (IMP.PORT, IMP.FISHERY, IMP.FARM):
             return 4.0
     elif focus == FOCUS.DEFENSE:
         # Defense doesn't produce anything staffable, so feed the soldiers.
@@ -142,21 +141,6 @@ def _cleanup_staffing(city, impr: list) -> None:
         if staffing[cell] <= 0:
             staffing.pop(cell, None)
 
-    # Keep building staffing in bounds as city-building levels change.
-    if not hasattr(city, "building_staffing") or city.building_staffing is None:
-        city.building_staffing = {}
-    bstaff = city.building_staffing
-    blevels = getattr(city, "buildings", None) or {}
-    for bkey in list(bstaff.keys()):
-        lvl = int(blevels.get(bkey, 0))
-        if lvl <= 0:
-            bstaff.pop(bkey, None)
-            continue
-        if bstaff[bkey] > lvl:
-            bstaff[bkey] = lvl
-        if bstaff[bkey] <= 0:
-            bstaff.pop(bkey, None)
-
 
 def update_city_employment(
     city, impr: list, *, rand: Callable[[], float] = random.random,
@@ -169,8 +153,6 @@ def update_city_employment(
     """
     if not hasattr(city, "staffing") or city.staffing is None:
         city.staffing = {}
-    if not hasattr(city, "building_staffing") or city.building_staffing is None:
-        city.building_staffing = {}
     if not hasattr(city, "employee_level_count") or city.employee_level_count is None:
         city.employee_level_count = 0
 
@@ -182,7 +164,7 @@ def update_city_employment(
 
     # Re-derive current from staffing sum (keeps things in sync if a
     # staffed building was destroyed out from under us).
-    current = min(current, sum(city.staffing.values()) + sum(city.building_staffing.values()))
+    current = min(current, sum(city.staffing.values()))
 
     if target > current:
         for _ in range(target - current):
@@ -205,7 +187,7 @@ def _profit_per_level(
 
     Multiplies the per-level marginal output (mirrors the formulas in
     simulation.py's production pass) by the city's current price for that
-    good. Smithery nets out copper-ore consumption. Caller runs this before prices
+    good. Smithery nets out ore consumption. Caller runs this before prices
     are recomputed for the new tick, so it reflects last tick's post-trade
     equilibrium."""
     it = imp_type(raw)
@@ -224,17 +206,14 @@ def _profit_per_level(
     if it == IMP.FARM:
         # Windmill coupling is ignored — all farms in a city roughly share
         # the same bonus structure so it doesn't shift the ordering.
-        out = 1.5 * riv * coast_mult * eff("grain")
-        return out * p.get("grain", BASE_PRICES["grain"])
+        out = 1.5 * riv * coast_mult * eff("food")
+        return out * p.get("food", BASE_PRICES["food"])
     if it == IMP.FISHERY:
-        out = 1.2 * coast_mult * eff("grain")
-        return out * p.get("grain", BASE_PRICES["grain"])
-    if it == IMP.COTTON:
-        out = 1.0 * riv * coast_mult * eff("fabric")
-        return out * p.get("fabric", BASE_PRICES["fabric"])
+        out = 1.2 * coast_mult * eff("food")
+        return out * p.get("food", BASE_PRICES["food"])
     if it == IMP.MINE:
-        out = (1.0 if r == "iron" else 0.25) * eff("copper_ore")
-        return out * p.get("copper_ore", BASE_PRICES["copper_ore"])
+        out = (1.0 if r == "iron" else 0.25) * eff("ore")
+        return out * p.get("ore", BASE_PRICES["ore"])
     if it == IMP.QUARRY:
         out = 2.0 * eff("stone")
         return out * p.get("stone", BASE_PRICES["stone"])
@@ -242,29 +221,12 @@ def _profit_per_level(
         out = 2.0 * eff("lumber")
         return out * p.get("lumber", BASE_PRICES["lumber"])
     if it == IMP.SMITHERY:
-        out = 2.0 * eff("copper")
+        out = 2.0 * eff("metal")
         return out * (
-            p.get("copper", BASE_PRICES["copper"])
-            - p.get("copper_ore", BASE_PRICES["copper_ore"])
+            p.get("metal", BASE_PRICES["metal"])
+            - p.get("ore", BASE_PRICES["ore"])
         )
     return 0.0
-
-
-def _building_profit_per_level(city, bkey: str) -> float:
-    """Gold/tick for one staffed building level."""
-    b = BUILDING_TYPES.get(bkey)
-    if b is None:
-        return 0.0
-    p = city.prices
-    out_v = sum(
-        amount * p.get(good, BASE_PRICES.get(good, 1.0))
-        for good, amount in b.outputs.items()
-    )
-    in_v = sum(
-        amount * p.get(good, BASE_PRICES.get(good, 1.0))
-        for good, amount in b.inputs.items()
-    )
-    return out_v - in_v
 
 
 def best_vacancy_profit(
@@ -297,46 +259,31 @@ def best_vacancy_profit(
         ppl = _profit_per_level(cell, raw, city, ter, res, rivers, good_efficiency)
         if ppl > best:
             best = ppl
-
-    # Include city-building vacancies in migration pull calculations.
-    if hasattr(city, "buildings") and city.buildings:
-        bstaff = getattr(city, "building_staffing", None) or {}
-        for bkey, lvl in city.buildings.items():
-            if lvl <= 0:
-                continue
-            if bstaff.get(bkey, 0) >= lvl:
-                continue
-            ppl = _building_profit_per_level(city, bkey)
-            if ppl > best:
-                best = ppl
     return best
 
 
 def reallocate_workers_by_profit(
     city, impr: list, ter: list, res: dict, rivers, good_efficiency,
 ) -> None:
-    """Market-impact-aware reallocation among producer improvements/buildings.
+    """Greedy sort-and-refill reallocation among direct-producer buildings.
 
-    The old full-reset allocator could oscillate (e.g. factory 4 -> 0 -> 4)
-    because it ignored that moving many workers at once changes local market
-    conditions. This version uses:
+    For each staffable producer cell, compute profit/level from current
+    efficiency and prices; sort descending; give the top cells as many
+    staffed levels as their building allows until the worker budget runs
+    out or the next cell's profit ≤ 0 (leaving workers unemployed beats
+    staffing a losing building).
 
-      1) diminishing marginal value per additional staffed level (proxy for
-         own market impact), and
-      2) hysteresis + limited shift rate per tick (prevents ping-pong).
+    Non-producer staffables (windmill/pasture/port) keep their current
+    staffing — their value model isn't priced. Their workers count against
+    the budget so we don't over-assign.
 
-    Non-producer staffables (windmill/pasture/port) keep their staffing and
-    count against the worker budget.
-    """
+    O(B log B) where B = staffable cells in the city (typically < 30).
+    Safe to call every ~10 ticks."""
     if not hasattr(city, "staffing") or city.staffing is None:
         city.staffing = {}
-    if not hasattr(city, "building_staffing") or city.building_staffing is None:
-        city.building_staffing = {}
     staffing = city.staffing
-    bstaff = city.building_staffing
 
-    # Entries: (base_profit_per_level, kind, key, capacity_levels)
-    producer_entries: list[tuple[float, str, object, int]] = []
+    producer_entries: list[tuple[float, int, int]] = []
     fixed_workers = 0
     for cell in city.tiles:
         if not (0 <= cell < N):
@@ -352,132 +299,26 @@ def reallocate_workers_by_profit(
             continue
         if it in DIRECT_PRODUCER_TYPES:
             ppl = _profit_per_level(cell, raw, city, ter, res, rivers, good_efficiency)
-            producer_entries.append((ppl, "imp", cell, bldg_lvl))
+            producer_entries.append((ppl, cell, bldg_lvl))
         else:
             fixed_workers += staffing.get(cell, 0)
 
-    # City buildings compete for the same workforce budget.
-    blevels = getattr(city, "buildings", None) or {}
-    for bkey, lvl in blevels.items():
-        if lvl <= 0:
-            continue
-        ppl = _building_profit_per_level(city, bkey)
-        producer_entries.append((ppl, "bld", bkey, int(lvl)))
-
     budget = max(0, int(city.employee_level_count) - fixed_workers)
 
-    # Build slot table keyed by (kind, key).
-    slots: dict[tuple[str, object], dict] = {}
-    for base_ppl, kind, key, cap in producer_entries:
-        cur = staffing.get(key, 0) if kind == "imp" else bstaff.get(key, 0)
-        slots[(kind, key)] = {
-            "base": base_ppl,
-            "cap": max(0, int(cap)),
-            "alloc": max(0, int(cur)),
-        }
+    for _, cell, _ in producer_entries:
+        staffing.pop(cell, None)
 
-    # Cap current allocations to each slot's capacity.
-    for s in slots.values():
-        if s["alloc"] > s["cap"]:
-            s["alloc"] = s["cap"]
+    producer_entries.sort(key=lambda x: -x[0])
 
-    # Market-impact proxy and anti-oscillation knobs.
-    MARKET_IMPACT_BETA = 0.35
-    SWITCH_MARGIN = 0.15
-    MAX_LEVEL_SHIFTS_PER_TICK = 2
-
-    def _marginal_value(slot: dict, current_alloc: int) -> float:
-        """Value of adding one more staffed level at current_alloc.
-
-        Diminishes with occupancy to approximate own impact on prices.
-        """
-        base = float(slot["base"])
-        if base <= 0:
-            return base
-        return base / (1.0 + MARKET_IMPACT_BETA * max(0, current_alloc))
-
-    # First, normalize to budget by trimming worst marginal units.
-    def _total_alloc() -> int:
-        return sum(s["alloc"] for s in slots.values())
-
-    while _total_alloc() > budget:
-        donor_id = None
-        donor_val = float("inf")
-        for sid, s in slots.items():
-            if s["alloc"] <= 0:
-                continue
-            # Value of the last staffed unit on this slot.
-            val = _marginal_value(s, s["alloc"] - 1)
-            if val < donor_val:
-                donor_val = val
-                donor_id = sid
-        if donor_id is None:
+    remaining = budget
+    for ppl, cell, bldg_lvl in producer_entries:
+        if remaining <= 0 or ppl <= 0:
             break
-        slots[donor_id]["alloc"] -= 1
+        take = min(bldg_lvl, remaining)
+        staffing[cell] = take
+        remaining -= take
 
-    # If we have spare budget, add to best positive marginal slots.
-    while _total_alloc() < budget:
-        recv_id = None
-        recv_val = 0.0
-        for sid, s in slots.items():
-            if s["alloc"] >= s["cap"]:
-                continue
-            val = _marginal_value(s, s["alloc"])
-            if val > recv_val:
-                recv_val = val
-                recv_id = sid
-        if recv_id is None or recv_val <= 0:
-            break
-        slots[recv_id]["alloc"] += 1
-
-    # Controlled rebalancing: only move a few levels/tick and only if
-    # the gain clears a margin, preventing back-and-forth flicker.
-    for _ in range(MAX_LEVEL_SHIFTS_PER_TICK):
-        donor_id = None
-        donor_val = float("inf")
-        recv_id = None
-        recv_val = 0.0
-
-        for sid, s in slots.items():
-            if s["alloc"] > 0:
-                val = _marginal_value(s, s["alloc"] - 1)
-                if val < donor_val:
-                    donor_val = val
-                    donor_id = sid
-            if s["alloc"] < s["cap"]:
-                val = _marginal_value(s, s["alloc"])
-                if val > recv_val:
-                    recv_val = val
-                    recv_id = sid
-
-        if donor_id is None or recv_id is None:
-            break
-        if recv_id == donor_id:
-            break
-        if recv_val <= 0:
-            break
-        if recv_val <= donor_val * (1.0 + SWITCH_MARGIN):
-            break
-
-        slots[donor_id]["alloc"] -= 1
-        slots[recv_id]["alloc"] += 1
-
-    # Rewrite only producer slots; keep non-producer staffing untouched.
-    for _, kind, key, _ in producer_entries:
-        if kind == "imp":
-            staffing.pop(key, None)
-        else:
-            bstaff.pop(key, None)
-
-    for (kind, key), s in slots.items():
-        if s["alloc"] <= 0:
-            continue
-        if kind == "imp":
-            staffing[key] = s["alloc"]
-        else:
-            bstaff[key] = s["alloc"]
-
-    city.employee_level_count = sum(staffing.values()) + sum(bstaff.values())
+    city.employee_level_count = sum(staffing.values())
 
 
 def staffed_level(city, cell: int, building_level: int) -> int:

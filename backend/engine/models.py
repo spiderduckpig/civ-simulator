@@ -126,6 +126,12 @@ class City(ModelMeta):
     # ── Employment ─────────────────────────────────
     # cell → how many building levels are staffed (<= building's level).
     staffing: Dict[int, int] = field(default_factory=dict)
+    # city-building key -> built level in this city.
+    buildings: Dict[str, int] = field(default_factory=dict)
+    # city-building key -> staffed levels in this city building.
+    building_staffing: Dict[str, int] = field(default_factory=dict)
+    # city-building key -> net profit this tick.
+    building_profit: Dict[str, float] = field(default_factory=dict)
     employee_level_count: int = 0
     # Population-derived workforce snapshots (refreshed per tick).
     workforce: int = 0
@@ -251,3 +257,100 @@ class War(ModelMeta):
     pre_ter_d: Set[int] = field(default_factory=set)
     captured_cities_a: List[int] = field(default_factory=list)
     captured_cities_d: List[int] = field(default_factory=list)
+
+
+# ── Economic goods (tradable resources) ──────────────────────────────────────
+
+@dataclass
+class Good(ModelMeta):
+    """A tradable good produced by cities and traded between civilizations.
+    
+    Attributes:
+        name: Display name (e.g., "Food", "Lumber")
+        base_price: Default market price (multiplied by supply/demand)
+        icon: Unicode character for UI display
+        produced_by: List of improvement type IDs that produce this good
+    """
+    name: str
+    base_price: float
+    icon: str
+    produced_by: List[int] = field(default_factory=list)
+
+
+# ── Map resources (deposit goods) ────────────────────────────────────────────
+
+@dataclass
+class Resource(ModelMeta):
+    """A resource that appears on map tiles (iron, gold, horses, etc.).
+    
+    Attributes:
+        name: Display name (e.g., "Iron", "Gold")
+        icon: Unicode character for UI display
+    """
+    name: str
+    icon: str
+
+
+# ── Improvement types ────────────────────────────────────────────────────────
+
+@dataclass
+class ImprovementType(ModelMeta):
+    """Metadata for an improvement type (building).
+    
+    Attributes:
+        type_id: Unique type identifier (mirrors IMP.FARM, IMP.MINE, etc.)
+        name: Display name
+        color: Hex color for map rendering
+        max_level: Maximum level this improvement can reach
+        staffable: Whether this improvement consumes workers
+        upgradable: Whether this improvement can be upgraded beyond level 1
+        produces_good: Name of the good this produces (if any)
+    """
+    type_id: int
+    name: str
+    color: str
+    max_level: int
+    staffable: bool
+    upgradable: bool
+    produces_good: Optional[str] = None
+
+
+@dataclass
+class ImprovementEconomyProfile(ModelMeta):
+    """Data-driven production/effect profile for a tile improvement.
+
+    This lets simulation compute supply/demand contributions without
+    hardcoding per-improvement formulas in the tick loop.
+    """
+    improvement_type: int
+    output_good: Optional[str] = None
+    output_eff_good: Optional[str] = None
+    output_base: float = 0.0
+    output_per_level: float = 0.0
+    demand_good: Optional[str] = None
+    demand_per_output: float = 0.0
+    use_river_mult: bool = False
+    use_coast_mult: bool = False
+    windmill_bonus_per_staffed_level: float = 0.0
+    # Resource-specific output multiplier (e.g., mines on iron).
+    resource_output_multiplier: Dict[str, float] = field(default_factory=dict)
+    # Whether this improvement should be tracked in city.farm_tiles.
+    counts_as_worked_tile: bool = True
+
+
+# ── City buildings ───────────────────────────────────────────────────────────
+
+@dataclass
+class BuildingType(ModelMeta):
+    """City-center building metadata.
+
+    Buildings are distinct from tile improvements: they are built in the city
+    itself and can consume one set of goods to produce another.
+    """
+    key: str
+    name: str
+    max_level: int
+    staffable: bool
+    cost_resources: Set[str] = field(default_factory=set)
+    inputs: Dict[str, float] = field(default_factory=dict)
+    outputs: Dict[str, float] = field(default_factory=dict)

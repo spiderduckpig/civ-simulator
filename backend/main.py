@@ -9,6 +9,7 @@ import mimetypes
 import random as stdlib_random
 import logging
 import traceback
+import time
 from typing import Optional, List, Dict
 
 # Fix Windows MIME type issue — Python reads from registry which is often wrong
@@ -20,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from engine.constants import N, W, H, IMP, DEFAULT_PARAMS, TERRAIN_COLORS, IMP_COLORS
+from engine.buildings import BUILDING_TYPES
 from engine.mapgen import gen_map
 from engine.civ import make_civ, reset_counters
 from engine.simulation import tick_sim
@@ -117,6 +119,22 @@ def _ser_civs(civs: List[Civ]) -> list:
                 "tiles":          ci.tiles,
                 "farm_tiles":     ci.farm_tiles,
                 "staffing":       {str(k): v for k, v in ci.staffing.items()},
+                "buildings":      ci.buildings,
+                "building_staffing": ci.building_staffing,
+                "building_profit": {k: round(v, 2) for k, v in ci.building_profit.items()},
+                "building_details": [
+                    {
+                        "key": key,
+                        "name": b.name,
+                        "level": int(ci.buildings.get(key, 0)),
+                        "staffed": int(ci.building_staffing.get(key, 0)),
+                        "inputs": b.inputs,
+                        "outputs": b.outputs,
+                        "profit": round(ci.building_profit.get(key, 0.0), 2),
+                    }
+                    for key, b in BUILDING_TYPES.items()
+                    if int(ci.buildings.get(key, 0)) > 0
+                ],
                 "employee_level_count": ci.employee_level_count,
                 "hp":             round(ci.hp, 1),
                 "max_hp":         round(ci.max_hp, 1),
@@ -239,6 +257,7 @@ async def _sim_loop(ws: WebSocket, state: GameState, lock: asyncio.Lock):
                             civs.append(nv)
                             state.add_event(f"🏛 Year {t}: {nv.name} founded")
 
+                tick_t0 = time.perf_counter()
                 new_civs = tick_sim(
                     civs, md.ter, md.res, state.om, state.wars,
                     md.rivers, state.impr, t, state.add_event, state.params,
@@ -246,6 +265,17 @@ async def _sim_loop(ws: WebSocket, state: GameState, lock: asyncio.Lock):
                 )
                 civs.extend(new_civs)
                 state.tick = t
+                tick_ms = (time.perf_counter() - tick_t0) * 1000.0
+                if t % 50 == 0:
+                    alive_civs = sum(1 for c in civs if c.alive)
+                    alive_cities = sum(len(c.cities) for c in civs if c.alive)
+                    log.info(
+                        "[perf] main_tick tick=%d dt=%.1fms alive_civs=%d alive_cities=%d",
+                        t,
+                        tick_ms,
+                        alive_civs,
+                        alive_cities,
+                    )
                 payload = json.dumps(_ser_state(state))
 
             await ws.send_text(payload)

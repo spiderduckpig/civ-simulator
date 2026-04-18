@@ -4,8 +4,6 @@ city development in engine.city_dev."""
 import heapq
 import math
 import random
-import logging
-import time
 from typing import List, Callable, Optional, Dict
 
 from .constants import (
@@ -26,22 +24,6 @@ from . import city_dev
 from . import diplomacy
 from . import employment
 from .employment import staffed_level
-
-
-log = logging.getLogger("civitas.simulation")
-
-# Performance controls (tick-based cadence and adaptive solver limits).
-PERF_LOG_PERIOD = 50
-WORKER_REALLOC_PERIOD = 10
-MIGRATION_PERIOD = 5
-from .buildings import BUILDING_TYPES
-from .economy_profiles import (
-    IMPROVEMENT_ECONOMY,
-    RESOURCE_TILE_EFFECTS,
-    CITY_BASE_DEMAND_PER_POP,
-    FORT_METAL_DEMAND_PER_TILE,
-    SUBSTITUTE_GROUPS,
-)
 
 
 # ── Settle scoring ─────────────────────────────────────────────────────────
@@ -186,44 +168,7 @@ def _get_price(good: str, supply: float, demand: float) -> float:
     return base * mult
 
 
-def _apply_substitute_demands(city: City) -> None:
-    """Reallocate base-good demand across substitute goods.
-
-    Allocation uses weighted availability so higher-preference substitutes
-    (e.g., bread) receive a larger demand share at similar availability.
-    """
-    for group in SUBSTITUTE_GROUPS:
-        base_good = str(group.get("base_good", ""))
-        members = dict(group.get("members", {}))
-        base_demand = city.demand.get(base_good, 0.0)
-        if base_demand <= 0.0 or not members:
-            continue
-
-        scores: dict[str, float] = {}
-        score_sum = 0.0
-        for good, pref in members.items():
-            avail = max(0.0, city.supply.get(good, 0.0))
-            score = (avail + 0.01) * max(0.01, float(pref))
-            scores[good] = score
-            score_sum += score
-
-        if score_sum <= 0.0:
-            continue
-
-        for good in members.keys():
-            city.demand[good] = 0.0
-        for good, score in scores.items():
-            city.demand[good] += base_demand * (score / score_sum)
-
-
-def _tick_trade(
-    civs: List[Civ], ter: list, om: list,
-    *,
-    settle_financials: bool = True,
-    record_trades: bool = True,
-    max_passes: int = 4,
-    stats: Optional[Dict[str, int]] = None,
-):
+def _tick_trade(civs: List[Civ], ter: list, om: list):
     """Arbitrage between cities within each civ — multi-pass deterministic
     equilibrium.
 
@@ -255,8 +200,7 @@ def _tick_trade(
                 d = dist(c1.cell, c2.cell)
                 pair_cost.append((c1, c2, d * TRANSPORT_COST_PER_DIST * 0.01))
 
-        pair_count = len(pair_cost)
-        for _pass in range(max_passes):
+        for _pass in range(4):
             # Build candidates using CURRENT effective prices.
             candidates = []
             for c1, c2, cost in pair_cost:
@@ -272,11 +216,6 @@ def _tick_trade(
 
             if not candidates:
                 break
-
-            if stats is not None:
-                stats["pairs"] = stats.get("pairs", 0) + pair_count
-                stats["candidates"] = stats.get("candidates", 0) + len(candidates)
-                stats["passes"] = stats.get("passes", 0) + 1
 
             # Highest-gap (most profitable) first. Deterministic — same
             # conditions produce the same ordering every tick.
@@ -327,29 +266,27 @@ def _tick_trade(
                 seller_quote = _get_price(good, s_supply, s_demand)
                 unit_price = seller_quote + cost_per_unit
                 total_cost = volume * unit_price
-                if settle_financials and buyer.gold < total_cost and unit_price > 0:
+                if buyer.gold < total_cost and unit_price > 0:
                     volume = buyer.gold / unit_price
                     total_cost = volume * unit_price
                 if volume <= 0.05:
                     continue
 
-                if settle_financials:
-                    buyer.gold  -= total_cost
-                    seller.gold += total_cost * 0.95
+                buyer.gold  -= total_cost
+                seller.gold += total_cost * 0.95
 
-                    buyer.income_import[good]  = buyer.income_import.get(good, 0.0)  + total_cost
-                    seller.income_export[good] = seller.income_export.get(good, 0.0) + total_cost * 0.95
+                buyer.income_import[good]  = buyer.income_import.get(good, 0.0)  + total_cost
+                seller.income_export[good] = seller.income_export.get(good, 0.0) + total_cost * 0.95
 
                 buyer.net_imports[good]  = buyer.net_imports.get(good, 0.0)  + volume
                 seller.net_imports[good] = seller.net_imports.get(good, 0.0) - volume
 
-                if record_trades:
-                    buyer.last_trades.setdefault(good, []).append(
-                        (volume, seller.name, unit_price)
-                    )
-                    seller.last_trades.setdefault(good, []).append(
-                        (-volume, buyer.name, seller_quote)
-                    )
+                buyer.last_trades.setdefault(good, []).append(
+                    (volume, seller.name, unit_price)
+                )
+                seller.last_trades.setdefault(good, []).append(
+                    (-volume, buyer.name, seller_quote)
+                )
                 any_trade = True
 
             if not any_trade:
@@ -484,16 +421,6 @@ def tick_sim(
     """Run one simulation step. Returns any newly-spawned civs (currently
     always empty — fragmentation is disabled)."""
 
-    tick_start = time.perf_counter()
-    section_prev = tick_start
-    perf: dict[str, float] = {}
-
-    def _mark(name: str) -> None:
-        nonlocal section_prev
-        now = time.perf_counter()
-        perf[name] = perf.get(name, 0.0) + (now - section_prev)
-        section_prev = now
-
     alive = [c for c in civs if c.alive]
 
     # ── Diplomacy ─────────────────────────────────────────────────────────
@@ -555,8 +482,6 @@ def tick_sim(
                 a.events.append(f"Year {a.age}: Allied with {b.name}")
                 b.events.append(f"Year {b.age}: Allied with {a.name}")
 
-    _mark("diplomacy")
-
     # ── Per-civ tick ───────────────────────────────────────────────────────
     for civ in alive:
         civ.age += 1
@@ -586,6 +511,12 @@ def tick_sim(
         # ── 1. Production & Local Markets ────────────────────────────────────
         # Regional efficiency shorthands — default to 1.0 (no modulation) if
         # the caller didn't pass a map (e.g. legacy tests).
+        eff_food   = good_efficiency["food"]   if good_efficiency else None
+        eff_lumber = good_efficiency["lumber"] if good_efficiency else None
+        eff_ore    = good_efficiency["ore"]    if good_efficiency else None
+        eff_stone  = good_efficiency["stone"]  if good_efficiency else None
+        eff_metal  = good_efficiency["metal"]  if good_efficiency else None
+
         def _eff(field, cell):
             return field[cell] if field is not None else 1.0
 
@@ -601,8 +532,8 @@ def tick_sim(
                 city.income_import[good] = 0.0
             city.income_misc = 0.0
 
-            # Every city has baseline staple output.
-            city.supply["grain"] = 1.0
+            # BASE FOOD: Every city has a baseline production of 1.0 food
+            city.supply["food"] = 1.0
 
             city.near_river = cell_on_river(city.cell, rivers)
             city.coastal    = cell_coastal(city.cell, ter)
@@ -625,7 +556,7 @@ def tick_sim(
             # Periodic profit-based reallocation: every 10 ticks move workers
             # from low-profit buildings to high-profit ones. Uses last tick's
             # post-trade prices (still in city.prices at this point).
-            if (tick % WORKER_REALLOC_PERIOD) == 0:
+            if tick % 10 == 0:
                 employment.reallocate_workers_by_profit(
                     city, impr, ter, res, rivers, good_efficiency,
                 )
@@ -642,207 +573,75 @@ def tick_sim(
                 coast_mult = 1.5 if cell_coastal(cell, ter) else 1.0
                 r = res.get(cell)
 
-                profile = IMPROVEMENT_ECONOMY.get(it)
-                if profile:
-                    if profile.counts_as_worked_tile:
-                        city.farm_tiles.append(cell)
-
-                    if profile.output_good:
-                        out = profile.output_base + profile.output_per_level * lvl
-                        if profile.use_river_mult:
-                            out *= riv
-                        if profile.use_coast_mult:
-                            out *= coast_mult
-
-                        if profile.windmill_bonus_per_staffed_level > 0:
-                            wm_mult = 1.0
-                            for n in neighbors(cell):
-                                if 0 <= n < N:
-                                    n_raw = impr[n]
-                                    if imp_type(n_raw) == IMP.WINDMILL:
-                                        n_lvl = imp_level(n_raw)
-                                        n_staff = staffed_level(city, n, n_lvl)
-                                        wm_mult += n_staff * profile.windmill_bonus_per_staffed_level
-                            out *= wm_mult
-
-                        if profile.resource_output_multiplier and r is not None:
-                            out *= profile.resource_output_multiplier.get(r, 1.0)
-
-                        eff_map = good_efficiency.get(profile.output_eff_good) if (good_efficiency and profile.output_eff_good) else None
-                        out *= _eff(eff_map, cell)
-
-                        city.supply[profile.output_good] += out
-                        if profile.demand_good and profile.demand_per_output > 0:
-                            city.demand[profile.demand_good] += out * profile.demand_per_output
-
-                # Flat resource tile effects are data-driven too.
-                effect = RESOURCE_TILE_EFFECTS.get(r)
-                if effect:
-                    if "income_misc" in effect:
-                        bonus = float(effect["income_misc"])
-                        city.gold += bonus
-                        city.income_misc += bonus
+                if it == IMP.FARM:
+                    # Windmill neighbour bonus
+                    wm_mult = 1.0
+                    for n in neighbors(cell):
+                        if 0 <= n < N:
+                            n_raw = impr[n]
+                            if imp_type(n_raw) == IMP.WINDMILL:
+                                n_lvl = imp_level(n_raw)
+                                n_staff = staffed_level(city, n, n_lvl)
+                                wm_mult += n_staff * 0.5
+                    city.supply["food"] += (2.5 + lvl * 1.5) * riv * coast_mult * wm_mult * _eff(eff_food, cell)
+                    city.farm_tiles.append(cell)
+                elif it == IMP.FISHERY:
+                    city.supply["food"] += (2.0 + lvl * 1.2) * coast_mult * _eff(eff_food, cell)
+                    city.farm_tiles.append(cell)
+                elif it == IMP.MINE:
+                    if r == "iron":
+                        city.supply["ore"] += (1.0 + lvl * 0.5) * 2.0 * _eff(eff_ore, cell)
                     else:
-                        g = effect.get("good")
-                        if g:
-                            amount = float(effect.get("amount", 0.0))
-                            if effect.get("river_mult"):
-                                amount *= riv
-                            if effect.get("coast_mult"):
-                                amount *= coast_mult
-                            city.supply[g] += amount
+                        city.supply["ore"] += (0.5 + lvl * 0.25) * _eff(eff_ore, cell)
+                    city.farm_tiles.append(cell)
+                elif it == IMP.QUARRY:
+                    city.supply["stone"] += (lvl * 2.0) * _eff(eff_stone, cell)
+                    city.farm_tiles.append(cell)
+                elif it == IMP.LUMBER:
+                    city.supply["lumber"] += (lvl * 2.0) * _eff(eff_lumber, cell)
+                    city.farm_tiles.append(cell)
+                elif it == IMP.SMITHERY:
+                    cap = lvl * 2.0 * _eff(eff_metal, cell)
+                    city.supply["metal"] += cap
+                    # Ore consumption scales with ACTUAL metal output so a
+                    # low-metal-efficiency smithery doesn't hoover ore it
+                    # can't convert.
+                    city.demand["ore"] += cap
+                    city.farm_tiles.append(cell)
+                elif it in (IMP.PASTURE, IMP.WINDMILL, IMP.PORT, IMP.FORT):
+                    city.farm_tiles.append(cell)
 
+                # Flat bonuses from map resources (unmodulated — these are
+                # point resources, not the regional biome bonus).
+                if r == "wheat": city.supply["food"] += 2.0 * riv
+                elif r == "fish": city.supply["food"] += 1.5 * coast_mult
+                elif r == "iron": city.supply["ore"] += 1.0
+                elif r == "stone": city.supply["stone"] += 1.0
+                elif r == "gold":
+                    city.gold += 2.0
+                    city.income_misc += 2.0
+            
             # Basic Demands
-            for good, coef in CITY_BASE_DEMAND_PER_POP.items():
-                city.demand[good] += city.population * coef
-            _apply_substitute_demands(city)
+            city.demand["food"] = city.population * 0.08
+            city.demand["lumber"] += city.population * 0.015
+            city.demand["stone"] += city.population * 0.01
             fort_count = sum(1 for t in assigned if imp_type(impr[t]) == IMP.FORT)
-            city.demand["copper"] += fort_count * FORT_METAL_DEMAND_PER_TILE
+            city.demand["metal"] += fort_count * 1.5
 
-            if not hasattr(city, "building_profit") or city.building_profit is None:
-                city.building_profit = {}
-            city.building_profit.clear()
+            # Update Prices
+            for good in GOODS:
+                city.prices[good] = _get_price(good, city.supply[good], city.demand[good])
 
-            # Base flow state for the intra-tick coupled building/trade solver.
-            city._base_supply = {g: city.supply.get(g, 0.0) for g in GOODS}
-            city._base_demand = {g: city.demand.get(g, 0.0) for g in GOODS}
-
-    _mark("production_local")
-
-    # ── 1.5 Coupled building/trade flow solve (no inventory) ─────────────────
-    # Converter buildings and trade are solved together inside the tick to
-    # avoid one-tick lag oscillations (fabric <-> clothes ping-pong).
-    all_cities = [ct for cv in alive for ct in cv.cities]
-    util_state: dict[tuple[int, str], float] = {}
-    for city in all_cities:
-        blevels = getattr(city, "buildings", None) or {}
-        bstaff = getattr(city, "building_staffing", None) or {}
-        for bkey, btype in BUILDING_TYPES.items():
-            lvl = int(blevels.get(bkey, 0))
-            staff_cap = min(lvl, int(bstaff.get(bkey, 0)))
-            if staff_cap > 0:
-                util_state[(city.cell, bkey)] = float(staff_cap)
-
-    if len(all_cities) >= 140:
-        COUPLED_ITERS = 2
-    elif len(all_cities) >= 70:
-        COUPLED_ITERS = 3
-    else:
-        COUPLED_ITERS = 4
-    UTIL_DAMP = 0.4
-    provisional_trade_passes = 1 if len(all_cities) >= 140 else 2
-    provisional_trade_stats: dict[str, int] = {}
-
-    for _it in range(COUPLED_ITERS):
-        # Reset to base flows for this coupled iteration.
-        for city in all_cities:
-            city.last_trades = {}
-            city.building_profit.clear()
-            for g in GOODS:
-                city.supply[g] = city._base_supply.get(g, 0.0)
-                city.demand[g] = city._base_demand.get(g, 0.0)
-                city.net_imports[g] = 0.0
-
-        # Apply converter plans as flow intents for this iteration.
-        for city in all_cities:
-            for bkey, btype in BUILDING_TYPES.items():
-                u = util_state.get((city.cell, bkey), 0.0)
-                if u <= 0:
-                    continue
-                for g, amt in btype.inputs.items():
-                    city.demand[g] += amt * u
-                for g, amt in btype.outputs.items():
-                    city.supply[g] += amt * u
-
-        # Provisional physical trade only (no gold/income side effects).
-        _tick_trade(
-            alive,
-            ter,
-            om,
-            settle_financials=False,
-            record_trades=False,
-            max_passes=provisional_trade_passes,
-            stats=provisional_trade_stats,
-        )
-
-        # Re-estimate feasible converter utilization from effective inputs.
-        max_delta = 0.0
-        for city in all_cities:
-            blevels = getattr(city, "buildings", None) or {}
-            bstaff = getattr(city, "building_staffing", None) or {}
-            for bkey, btype in BUILDING_TYPES.items():
-                lvl = int(blevels.get(bkey, 0))
-                staff_cap = min(lvl, int(bstaff.get(bkey, 0)))
-                if staff_cap <= 0:
-                    continue
-                old_u = util_state.get((city.cell, bkey), 0.0)
-
-                ratio = 1.0
-                for g, amt in btype.inputs.items():
-                    desired = amt * staff_cap
-                    if desired <= 0:
-                        continue
-                    eff_avail = city.supply.get(g, 0.0) + city.net_imports.get(g, 0.0)
-                    ratio = min(ratio, eff_avail / desired)
-                ratio = max(0.0, min(1.0, ratio))
-
-                target_u = staff_cap * ratio
-                new_u = old_u * (1.0 - UTIL_DAMP) + target_u * UTIL_DAMP
-                util_state[(city.cell, bkey)] = max(0.0, new_u)
-                d = abs(new_u - old_u)
-                if d > max_delta:
-                    max_delta = d
-
-        if max_delta < 0.05:
-            break
-
-    _mark("coupled_flow_solver")
-
-    # Final settled pass with money/income/trade logs.
-    for city in all_cities:
-        city.last_trades = {}
-        city.building_profit.clear()
-        for g in GOODS:
-            city.supply[g] = city._base_supply.get(g, 0.0)
-            city.demand[g] = city._base_demand.get(g, 0.0)
-            city.net_imports[g] = 0.0
-
-    for city in all_cities:
-        for bkey, btype in BUILDING_TYPES.items():
-            u = util_state.get((city.cell, bkey), 0.0)
-            if u <= 0:
-                continue
-            for g, amt in btype.inputs.items():
-                city.demand[g] += amt * u
-            for g, amt in btype.outputs.items():
-                city.supply[g] += amt * u
-
-            out_val = sum(
-                amt * u * city.prices.get(g, BASE_PRICES.get(g, 1.0))
-                for g, amt in btype.outputs.items()
-            )
-            in_val = sum(
-                amt * u * city.prices.get(g, BASE_PRICES.get(g, 1.0))
-                for g, amt in btype.inputs.items()
-            )
-            city.building_profit[bkey] = out_val - in_val
+                # In a flow economy, consumption is immediate based on demand
+                # Domestic gold income is from population buying their needs
+                dom = city.demand[good] * city.prices[good] * 0.15
+                city.gold += dom
+                city.income_domestic[good] += dom
 
     # ── 2. Arbitrage (Trade) ──────────────────────────────────────────────────
     # Runs every tick so trade flows are persistent in the UI. Volume per
     # pair self-regulates to the marginal-profit-zero point (see _tick_trade).
-    final_trade_passes = 2 if len(all_cities) >= 140 else (3 if len(all_cities) >= 80 else 4)
-    final_trade_stats: dict[str, int] = {}
-    _tick_trade(
-        alive,
-        ter,
-        om,
-        settle_financials=True,
-        record_trades=True,
-        max_passes=final_trade_passes,
-        stats=final_trade_stats,
-    )
-
-    _mark("trade_settlement")
+    _tick_trade(alive, ter, om)
 
     # Refresh prices to reflect the post-trade equilibrium. Effective supply
     # is (local production + net_imports), so a city that imports heavily
@@ -852,11 +651,6 @@ def tick_sim(
             for good in GOODS:
                 effective = city.supply.get(good, 0.0) + city.net_imports.get(good, 0.0)
                 city.prices[good] = _get_price(good, effective, city.demand.get(good, 0.0))
-
-                # Flow-economy domestic spending captured by city treasury.
-                dom = city.demand[good] * city.prices[good] * 0.15
-                city.gold += dom
-                city.income_domestic[good] += dom
 
             # ── Income & employment snapshots ────────────────────────────
             dom = sum(city.income_domestic.values())
@@ -870,127 +664,109 @@ def tick_sim(
             city.employed_pop  = city.employee_level_count * 20
             city.unemployed_pop = max(0, city.workforce * 20 - city.employed_pop)
 
-            # Cleanup temporary solver state.
-            if hasattr(city, "_base_supply"):
-                del city._base_supply
-            if hasattr(city, "_base_demand"):
-                del city._base_demand
-
-    _mark("price_income")
-
     # ── 3. Population Dynamics (Pure Flow Logic) ──────────────────────────────
     for civ in alive:
         for city in civ.cities:
             # NET FLOW: supply + net_imports - demand
-            staple_supply = city.supply.get("grain", 0.0) + city.supply.get("bread", 0.0)
-            staple_imports = city.net_imports.get("grain", 0.0) + city.net_imports.get("bread", 0.0)
-            staple_demand = city.demand.get("grain", 0.0) + city.demand.get("bread", 1.0)
-
-            net_staple_flow = staple_supply + staple_imports - staple_demand
-
-            if net_staple_flow < 0:
+            food_supply = city.supply.get("food", 0.0)
+            food_imports = city.net_imports.get("food", 0.0)
+            food_demand = city.demand.get("food", 1.0)
+            
+            net_food_flow = food_supply + food_imports - food_demand
+            
+            if net_food_flow < 0:
                 # STARVATION: Direct loss based on deficit
                 # 1 unit deficit = ~12.5 people
-                shrinkage = abs(net_staple_flow) * 15.0
+                shrinkage = abs(net_food_flow) * 15.0
                 city.population = max(40.0, city.population - shrinkage)
             else:
                 # GROWTH: Based on physical surplus
                 # Growth proportional to the surplus magnitude relative to demand
-                surplus_ratio = min(1.0, net_staple_flow / max(1.0, staple_demand))
+                surplus_ratio = min(1.0, net_food_flow / max(1.0, food_demand))
                 growth = 0.12 * surplus_ratio * city.population
                 city.population += growth
-
-    _mark("population")
 
     # ── 3.5 Immigration (intra-civ) ──────────────────────────────────────────
     # Each city gets an attractiveness score (unemployment penalty + rolling
     # income bonus). Within the civ, emigrants from unattractive cities flow
     # to attractive ones. Total emigrants = total immigrants per tick, so
-    # civ population is conserved here (staple dynamics handles growth/decay).
+    # civ population is conserved here (food dynamics handles growth/decay).
     # Cities at the 40-pop floor can receive but cannot emigrate below 40.
     INCOME_HIST_LEN = 10
     MIGRATION_RATE  = 0.01  # up to 1% of pop moves per tick from a 0-rel city
 
-    run_migration = (tick % MIGRATION_PERIOD) == 0
-    if run_migration:
-        for civ in alive:
-            cities = civ.cities
-            if not cities:
-                continue
+    for civ in alive:
+        cities = civ.cities
+        if not cities:
+            continue
 
-            # 1. Update rolling income history + compute attractiveness.
+        # 1. Update rolling income history + compute attractiveness.
+        for city in cities:
+            hist = city.income_per_person_hist
+            hist.append(city.income_per_person)
+            if len(hist) > INCOME_HIST_LEN:
+                hist[:] = hist[-INCOME_HIST_LEN:]
+            avg_income = sum(hist) / len(hist) if hist else 0.0
+
+            # Best unstaffed producer slot — an "opportunity" signal that
+            # pulls migrants toward cities with idle productive capacity.
+            # Normalised per-person (divide by workers/level) so it's on
+            # the same scale as avg_income, then weighted a bit heavier.
+            best_vac = employment.best_vacancy_profit(
+                city, impr, ter, res, rivers, good_efficiency,
+            )
+            opp_per_person = best_vac / 20.0  # N_EMPLOYEES_PER_LEVEL
+
+            pop         = max(1.0, city.population)
+            unemp_rate  = city.unemployed_pop / pop
+            static_pen  = 0.05 if city.unemployed_pop >= 20 else 0.0
+            scale_pen   = unemp_rate * 3.0
+            income_bon  = avg_income    * 4.0
+            opp_bon     = opp_per_person * 1.5
+
+            city.attractiveness = max(
+                0.05, 1.0 + income_bon + opp_bon - static_pen - scale_pen,
+            )
+
+        if len(cities) < 2:
             for city in cities:
-                hist = city.income_per_person_hist
-                hist.append(city.income_per_person)
-                if len(hist) > INCOME_HIST_LEN:
-                    hist[:] = hist[-INCOME_HIST_LEN:]
-                avg_income = sum(hist) / len(hist) if hist else 0.0
-
-                # Best unstaffed producer slot — an "opportunity" signal that
-                # pulls migrants toward cities with idle productive capacity.
-                # Normalised per-person (divide by workers/level) so it's on
-                # the same scale as avg_income, then weighted a bit heavier.
-                best_vac = employment.best_vacancy_profit(
-                    city, impr, ter, res, rivers, good_efficiency,
-                )
-                opp_per_person = best_vac / 20.0  # N_EMPLOYEES_PER_LEVEL
-
-                pop         = max(1.0, city.population)
-                unemp_rate  = city.unemployed_pop / pop
-                static_pen  = 0.05 if city.unemployed_pop >= 20 else 0.0
-                scale_pen   = unemp_rate * 3.0
-                income_bon  = avg_income    * 4.0
-                opp_bon     = opp_per_person * 1.5
-
-                city.attractiveness = max(
-                    0.05, 1.0 + income_bon + opp_bon - static_pen - scale_pen,
-                )
-
-            if len(cities) < 2:
-                for city in cities:
-                    city.net_migration = 0.0
-                continue
-
-            max_attr   = max(c.attractiveness for c in cities)
-            total_attr = sum(c.attractiveness for c in cities)
-            if max_attr <= 0 or total_attr <= 0:
-                for city in cities:
-                    city.net_migration = 0.0
-                continue
-
-            # 2. Outflow pool: each city emits in proportion to how far below the
-            # civ's best it is. Cap so pop can't drop below 40 from emigration.
-            emigrants: list[float] = []
-            total_pool = 0.0
-            for city in cities:
-                rel    = city.attractiveness / max_attr
-                raw    = city.population * MIGRATION_RATE * (1.0 - rel)
-                cap    = max(0.0, city.population - 40.0)
-                out    = min(raw, cap)
-                emigrants.append(out)
-                total_pool += out
-
-            # 3. Redistribute pool across cities proportional to attractiveness.
-            for i, city in enumerate(cities):
-                share = total_pool * (city.attractiveness / total_attr)
-                net   = share - emigrants[i]
-                city.net_migration = net
-                city.population   += net
-    else:
-        for civ in alive:
-            for city in civ.cities:
                 city.net_migration = 0.0
+            continue
 
-    _mark("migration")
+        max_attr   = max(c.attractiveness for c in cities)
+        total_attr = sum(c.attractiveness for c in cities)
+        if max_attr <= 0 or total_attr <= 0:
+            for city in cities:
+                city.net_migration = 0.0
+            continue
+
+        # 2. Outflow pool: each city emits in proportion to how far below the
+        # civ's best it is. Cap so pop can't drop below 40 from emigration.
+        emigrants: list[float] = []
+        total_pool = 0.0
+        for city in cities:
+            rel    = city.attractiveness / max_attr
+            raw    = city.population * MIGRATION_RATE * (1.0 - rel)
+            cap    = max(0.0, city.population - 40.0)
+            out    = min(raw, cap)
+            emigrants.append(out)
+            total_pool += out
+
+        # 3. Redistribute pool across cities proportional to attractiveness.
+        for i, city in enumerate(cities):
+            share = total_pool * (city.attractiveness / total_attr)
+            net   = share - emigrants[i]
+            city.net_migration = net
+            city.population   += net
 
     # ── Post-Economy Housekeeping ───────────────────────────────────────────
     for civ in alive:
         civ.population = sum(c.population for c in civ.cities)
         # Civ-level stats for the UI
-        civ.farm_output  = sum(c.supply["grain"] for c in civ.cities)
-        civ.ore_output   = sum(c.supply["copper_ore"] for c in civ.cities)
+        civ.farm_output  = sum(c.supply["food"] for c in civ.cities)
+        civ.ore_output   = sum(c.supply["ore"] for c in civ.cities)
         civ.stone_output = sum(c.supply["stone"] for c in civ.cities)
-        civ.metal_output = sum(c.supply["copper"] for c in civ.cities)
+        civ.metal_output = sum(c.supply["metal"] for c in civ.cities)
         # Sum gold for UI, but don't overwrite the city-level gold which is 
         # what matters for investment.
         total_gold = sum(c.gold for c in civ.cities)
@@ -1177,12 +953,8 @@ def tick_sim(
             civ.capital = cap_cell
             add_event(f"🏛 Year {tick}: {civ.name} refounded {cn}")
 
-    _mark("post_econ_citydev")
-
     # ── Army tick (movement, behavior, combat, fort respawn) ──────────────
     combat.tick_armies(alive, wars, ter, impr, om, tick, add_event)
-
-    _mark("army")
 
     # ── City HP regen ─────────────────────────────────────────────────────
     for civ in alive:
@@ -1191,29 +963,5 @@ def tick_sim(
             city.max_hp = combat.city_max_hp(city, impr)
             if city.hp < city.max_hp and tick - city.last_dmg_tick > 8:
                 city.hp = min(city.max_hp, city.hp + CITY_HP_REGEN)
-
-    _mark("city_hp_regen")
-
-    if tick % PERF_LOG_PERIOD == 0:
-        total = (time.perf_counter() - tick_start) * 1000.0
-        cities_n = sum(len(c.cities) for c in alive)
-        hot = sorted(perf.items(), key=lambda kv: kv[1], reverse=True)[:5]
-        hot_txt = ", ".join(f"{k}={v * 1000.0:.1f}ms" for k, v in hot)
-        log.info(
-            "[perf] tick=%d civs=%d cities=%d total=%.1fms | %s | trade(prov p=%d c=%d ps=%d, final p=%d c=%d ps=%d) | cadences realloc=%d migration=%d",
-            tick,
-            len(alive),
-            cities_n,
-            total,
-            hot_txt,
-            provisional_trade_stats.get("pairs", 0),
-            provisional_trade_stats.get("candidates", 0),
-            provisional_trade_stats.get("passes", 0),
-            final_trade_stats.get("pairs", 0),
-            final_trade_stats.get("candidates", 0),
-            final_trade_stats.get("passes", 0),
-            WORKER_REALLOC_PERIOD,
-            MIGRATION_PERIOD,
-        )
 
     return []
