@@ -7,10 +7,11 @@ from typing import Callable, Optional
 
 from .constants import (
     N, IMP, FOCUS, T,
-    INVEST_COST_BASE_FRAC, INVEST_COST_LEVEL_POW, INVEST_MIN_WEALTH_FLOOR,
     INVEST_MAX_PER_TICK, INVEST_PERIOD_TICKS, FOCUS_HMM_PERIOD,
-    FORT_BUILD_METAL_COST,
+    FORT_BUILD_METAL_COST, BASE_PRICES, N_EMPLOYEES_PER_LEVEL,
 )
+from . import employment
+from .employment import STAFFABLE_TYPES as _STAFFABLE
 from .improvements import (
     imp_type, imp_level, upgrade_imp, make_imp,
     max_level, UPGRADABLE_TYPES,
@@ -27,22 +28,91 @@ _FORT_TERRAIN = (T.PLAINS, T.GRASS, T.FOREST, T.HILLS)
 REBUILD_CHANCE = 0.004
 
 
-# ── Upgrade cost (scale-free fraction of city wealth) ──────────────────────
+# ── Upgrade cost (Gold only, but scaled by material prices) ──────────────────
 
-def _upgrade_cost(city: City, current_level: int) -> float:
-    # Fraction of city wealth, not a flat gold cost — stays scale-free.
-    base_wealth = max(city.wealth, INVEST_MIN_WEALTH_FLOOR)
-    level_mult = max(1.0, current_level) ** INVEST_COST_LEVEL_POW
-    return base_wealth * INVEST_COST_BASE_FRAC * level_mult
+def _upgrade_cost(city: City, it: int, current_level: int) -> float:
+    # Base gold cost scales with level. New builds and the first upgrade
+    # (current_level 0 or 1) stay at baseline; the ramp is intentionally steep
+    # so high-level buildings dominate a city's gold budget.
+    level_mult = max(1.0, current_level) ** 1.8
+    base_gold = 8.0 * level_mult
+    
+    # Material requirements (now purely for price scaling)
+    mats = {}
+    if current_level > 0:
+        if it == IMP.FARM:
+            mats["lumber"] = 4.0 * level_mult
+        elif it == IMP.MINE or it == IMP.QUARRY:
+            mats["lumber"] = 6.0 * level_mult
+            mats["stone"]  = 3.0 * level_mult
+        elif it == IMP.SMITHERY:
+            mats["stone"]  = 10.0 * level_mult
+            mats["metal"]  = 4.0 * level_mult
+        elif it == IMP.FORT:
+            mats["stone"]  = 15.0 * level_mult
+            mats["metal"]  = 8.0 * level_mult
+        else:
+            mats["lumber"] = 4.0 * level_mult
+            mats["stone"]  = 2.0 * level_mult
+
+    # Add material costs based on local prices
+    total_cost = base_gold
+    for good, amt in mats.items():
+        price = city.prices.get(good, 1.0)
+        total_cost += amt * price
+        
+    return total_cost
 
 
-def _try_debit(city: City, cost: float) -> bool:
-    if cost <= 0:
-        return True
-    if city.wealth >= cost:
-        city.wealth -= cost
-        return True
-    return False
+def _try_buy(city: City, cost: float) -> bool:
+    if city.gold < cost:
+        return False
+    city.gold -= cost
+    return True
+
+
+# ── Profitability hint ────────────────────────────────────────────────────
+# Producer imp for each tradable good. Used to bias "what to build next"
+# toward whichever output is currently scarce (high local price).
+_GOOD_TO_PRODUCER = {
+    "food":   IMP.FARM,
+    "lumber": IMP.LUMBER,
+    "ore":    IMP.MINE,
+    "stone":  IMP.QUARRY,
+    "metal":  IMP.SMITHERY,
+}
+
+# Minimum price-to-base ratio before we consider a good "scarce enough to
+# chase". Anything under this stays at baseline and doesn't hijack the goal.
+_PROFIT_THRESHOLD = 1.15
+
+# Probability of substituting the profitable pick in for the goal-queue pick
+# on a build-new action. Heavy weight per the design brief; the goal still
+# wins the remainder of the time.
+_PROFIT_BIAS = 0.7
+
+
+def _most_profitable_imp(city: City) -> Optional[int]:
+    """Return the producer imp with the highest expected profit per build
+    at this city, where profit = local_price_ratio × regional_efficiency.
+
+    Cities in a low-stone region see their quarry score stay low even if
+    stone prices are high — which pushes them toward importing stone rather
+    than pouring gold into a quarry that barely produces anything.
+    """
+    best_imp: Optional[int] = None
+    best_score = _PROFIT_THRESHOLD
+    local_eff = getattr(city, "local_efficiency", None) or {}
+    for good, imp_t in _GOOD_TO_PRODUCER.items():
+        base = BASE_PRICES.get(good, 1.0)
+        price = city.prices.get(good, base)
+        price_ratio = price / max(base, 0.01)
+        eff = local_eff.get(good, 1.0)
+        score = price_ratio * eff
+        if score > best_score:
+            best_score = score
+            best_imp = imp_t
+    return best_imp
 
 
 # ── Tile picking heuristics ────────────────────────────────────────────────
@@ -55,34 +125,25 @@ def _pick_upgrade_candidate(
     if not tiles:
         return None
 
-    best_pref: Optional[tuple[int, int]] = None  # (level, cell)
-    best_any:  Optional[tuple[int, int]] = None
-
+    candidates = []
     for cell in tiles:
-        if not (0 <= cell < N):
-            continue
+        if not (0 <= cell < N): continue
         raw = impr[cell]
-        if not raw:
-            continue
-        it  = imp_type(raw)
+        if not raw: continue
+        it = imp_type(raw)
         lvl = imp_level(raw)
-        if it not in UPGRADABLE_TYPES:
-            continue
-        if lvl >= max_level(it):
-            continue
-        key = (lvl, cell)
-        if it in preferred_types:
-            if best_pref is None or key < best_pref:
-                best_pref = key
-        else:
-            if best_any is None or key < best_any:
-                best_any = key
+        if it not in UPGRADABLE_TYPES: continue
+        if lvl >= max_level(it): continue
+        
+        # Priority: (is_not_preferred, level, random_tiebreaker)
+        is_pref = 0 if it in preferred_types else 1
+        candidates.append((is_pref, lvl, random.random(), cell))
 
-    if best_pref is not None:
-        return best_pref[1]
-    if best_any is not None:
-        return best_any[1]
-    return None
+    if not candidates:
+        return None
+        
+    candidates.sort()
+    return candidates[0][3]
 
 
 def _focus_preferred_types(focus: int) -> set:
@@ -104,15 +165,20 @@ def _focus_transition(
 ) -> None:
     f = city.focus
     pop = max(1.0, city.population)
-    food = city.food_production
-    ore  = getattr(city, "city_ore", 0.0)
-    stone = getattr(city, "city_stone", 0.0)
-    trade = getattr(city, "trade_potential", 0.0)
+    
+    # Use supply dict for signals
+    food = city.supply.get("food", 0.0)
+    ore  = city.supply.get("ore", 0.0)
+    stone = city.supply.get("stone", 0.0)
+    
+    # Trade potential is now more abstract but we can use gold income or 
+    # specific trade-related stocks if needed. For now, use a baseline.
+    trade = city.gold / 50.0 
     coastal = city.coastal
 
     # Scale-free evidence signals (all fractions of population, not raw numbers)
-    food_deficit = food < pop * 0.3
-    food_surplus = food > pop * 0.6
+    food_deficit = food < pop * 0.12
+    food_surplus = food > pop * 0.25
     ore_rich     = (ore + stone) > pop * 0.05
     trade_rich   = trade > pop * 0.25
 
@@ -175,22 +241,23 @@ def _place_new_improvement(
     if not tiles:
         return False
 
-    # Look at up to 8 random empty tiles; pick the first one a placer likes.
+    # Filter for empty tiles within our assigned area
     empties = [c for c in tiles if 0 <= c < N and impr[c] == IMP.NONE]
     if not empties:
         return False
+    
+    # Increase search depth: look at up to 20 candidates
     random.shuffle(empties)
 
     focus = city.focus
-    for cell in empties[:8]:
+    for cell in empties[:20]:
         pick = best_improvement(ter, res, cell, rivers, focus, rand=rand)
         if pick == IMP.NONE:
             continue
-        # Cost: one-level-1 build is a small fraction of city wealth
-        cost = max(INVEST_MIN_WEALTH_FLOOR * 0.6,
-                   city.wealth * INVEST_COST_BASE_FRAC * 0.5)
-        if not _try_debit(city, cost):
-            return False
+        it = pick
+        costs = _upgrade_cost(city, it, 0)
+        if not _try_buy(city, costs):
+            continue # Try another tile, maybe it's cheaper or we have different stocks
         impr[cell] = make_imp(pick, 1)
         return True
     return False
@@ -204,7 +271,7 @@ def _place_advanced_structure(
     smithery) on one of the city's empty tiles.
 
     Adjacent structures get more benefit to the city by being near existing
-    improvements. Costs are scaled vs. city wealth, same as upgrades.
+    improvements. Costs are scaled vs. city gold, same as upgrades.
     """
     tiles = city.tiles
     if not tiles:
@@ -223,22 +290,23 @@ def _place_advanced_structure(
         )
         for t in tiles
     )
-    # Check current ore stock/production too
-    current_ore = getattr(city, "city_ore", 0.0)
-    current_ore_total = getattr(city, "city_ore_total", 0.0)
-    has_ore = current_ore > 0.1 or current_ore_total > 0.1 or has_ore_potential
+    # Check current ore availability too
+    current_production_ore = city.supply.get("ore", 0.0)
+    current_imports_ore = city.net_imports.get("ore", 0.0)
+    has_ore = current_production_ore > 0.1 or current_imports_ore > 0.1 or has_ore_potential
 
     focus = city.focus
-    for cell in empties[:12]:
+    # Increase search depth
+    for cell in empties[:20]:
         pick = advanced_structure_for(cell, ter, impr, focus, rand=rand)
         if pick == IMP.NONE:
             continue
         if pick == IMP.SMITHERY and not has_ore:
             continue
-        cost = max(INVEST_MIN_WEALTH_FLOOR,
-                   city.wealth * INVEST_COST_BASE_FRAC * 0.8)
-        if not _try_debit(city, cost):
-            return False
+        it = pick
+        costs = _upgrade_cost(city, it, 0)
+        if not _try_buy(city, costs):
+            continue
         impr[cell] = make_imp(pick, 1)
         return True
     return False
@@ -303,9 +371,9 @@ def _place_fort(
 
     empties.sort(key=border_score)
     # Cheap-ish: forts are strategic so they cost a bit more than a farm.
-    cost = max(INVEST_MIN_WEALTH_FLOOR * 1.2,
-               city.wealth * INVEST_COST_BASE_FRAC * 1.0)
-    if not _try_debit(city, cost):
+    it = IMP.FORT
+    costs = _upgrade_cost(city, it, 0)
+    if not _try_buy(city, costs):
         return False
 
     civ.metal_stock -= FORT_BUILD_METAL_COST
@@ -354,9 +422,8 @@ def _rebuild_improvement(
         if pick == IMP.NONE or pick == imp_type(impr[cell]):
             continue
         # Rebuild is expensive: roughly 3× a normal placement.
-        cost = max(INVEST_MIN_WEALTH_FLOOR * 2.0,
-                   city.wealth * INVEST_COST_BASE_FRAC * 2.5)
-        if not _try_debit(city, cost):
+        cost = _upgrade_cost(city, pick, 0) * 3.0
+        if not _try_buy(city, cost):
             return False
         impr[cell] = make_imp(pick, 1)
         return True
@@ -365,103 +432,176 @@ def _rebuild_improvement(
 
 # ── Public entry: per-civ per-tick city development ───────────────────────
 
+def _try_upgrade(city: City, build_type: int, impr: list) -> bool:
+    """Upgrade the lowest-level instance of ``build_type`` in this city."""
+    best_cell = -1
+    best_lvl = max_level(build_type)
+    for cell in city.tiles:
+        if not (0 <= cell < N):
+            continue
+        raw = impr[cell]
+        if imp_type(raw) != build_type:
+            continue
+        lvl = imp_level(raw)
+        if lvl >= max_level(build_type):
+            continue
+        if lvl < best_lvl:
+            best_lvl = lvl
+            best_cell = cell
+    if best_cell < 0:
+        return False
+    cost = _upgrade_cost(city, build_type, best_lvl)
+    if not _try_buy(city, cost):
+        return False
+    impr[best_cell] = upgrade_imp(impr[best_cell])
+    return True
+
+
+def _try_build_new(city: City, build_type: int, impr: list) -> bool:
+    """Place a fresh improvement of ``build_type`` on an empty tile."""
+    empties = [c for c in city.tiles if 0 <= c < N and impr[c] == IMP.NONE]
+    if not empties:
+        return False
+    random.shuffle(empties)
+    for cell in empties[:15]:
+        cost = _upgrade_cost(city, build_type, 0)
+        if not _try_buy(city, cost):
+            return False  # can't afford — no point trying more cells
+        impr[cell] = make_imp(build_type, 1)
+        return True
+    return False
+
+
+def _city_has_no_buildings(city: City, impr: list) -> bool:
+    for c in city.tiles:
+        if 0 <= c < N and impr[c] != IMP.NONE:
+            return False
+    return True
+
+
+def _pick_build_type(city: City, goal_imp: Optional[int], impr: list) -> int:
+    """Decide what this city should work on this tick.
+
+    Priority order:
+      1. Profitability bias (same 70/30 as before) picks the most profitable
+         producer when one is meaningfully above base price.
+      2. Otherwise the civ's current goal.
+      3. Fallback: a farm (cheap, always useful when you're starving).
+    """
+    profitable = _most_profitable_imp(city)
+    if profitable is not None and random.random() < _PROFIT_BIAS:
+        return profitable
+    if goal_imp is not None:
+        return goal_imp
+    return profitable if profitable is not None else IMP.FARM
+
+
+def _unstaffed_levels(city: City, impr: list) -> int:
+    """Total staffable building levels not currently filled. A city with
+    plenty of empty capacity shouldn't keep building new structures — it
+    should upgrade existing ones or just save gold until population grows.
+    """
+    total = 0
+    staffing = city.staffing
+    for cell in city.tiles:
+        if not (0 <= cell < N):
+            continue
+        raw = impr[cell]
+        it = imp_type(raw)
+        if it not in _STAFFABLE:
+            continue
+        total += imp_level(raw) - staffing.get(cell, 0)
+    return total
+
+
+def _try_one_action(
+    city: City, goal_imp: Optional[int], impr: list,
+) -> bool:
+    """Attempt a single build-or-upgrade action for this city. Biased to
+    build new capacity when the city has unemployed workers (they need
+    somewhere to work).
+    """
+    build_type = _pick_build_type(city, goal_imp, impr)
+    unemployed = getattr(city, "unemployed_pop", 0)
+    # Don't stack unstaffed capacity: if there's already room for a full
+    # employment level sitting idle, upgrading is the only sensible move.
+    idle_capacity = _unstaffed_levels(city, impr)
+    excess_capacity = idle_capacity >= 2
+
+    # Unemployment → prefer new building. No unemployment → prefer upgrade.
+    if unemployed >= N_EMPLOYEES_PER_LEVEL and not excess_capacity:
+        if _try_build_new(city, build_type, impr):
+            return True
+        return _try_upgrade(city, build_type, impr)
+    else:
+        if _try_upgrade(city, build_type, impr):
+            return True
+        if excess_capacity:
+            return False  # don't sprawl more unstaffed buildings
+        return _try_build_new(city, build_type, impr)
+
+
 def tick_city_development(
     civ: Civ, wars: dict, ter: list, res: dict, rivers: dict, impr: list,
-    tick: int, om: list | None = None,
+    tick: int, om: Optional[list] = None,
 ) -> None:
-    """Update one civ's cities: focus HMM, investment, placement.
+    """Per-tick building decisions for every city in the civ.
 
-    Called from the main simulation loop once per civ per tick (after
-    per-city production has been computed). Per-city state is expected to
-    include: ``tiles``, ``wealth``, ``focus``, ``food_production``,
-    ``city_ore``, ``city_stone``, ``trade_potential``, ``population``,
-    ``coastal``.
+    Each city attempts up to ``INVEST_MAX_PER_TICK`` build/upgrade actions,
+    independently, so non-capital cities actually develop. The civ-level
+    goal queue still biases *what* to build (via ``_pick_build_type``) but
+    no longer gates *who* gets to build: the rule used to be "one city per
+    goal-advance," which left everything but the capital empty.
     """
     if not civ.cities:
         return
 
-    civ_is_at_war = any(
-        w.att == civ.id or w.def_id == civ.id for w in wars.values()
-    )
+    civ.goal_ticks += 1
 
-    # ── Focus transitions (infrequent) ───────────────────────────────────
-    if tick % FOCUS_HMM_PERIOD == 0:
-        for city in civ.cities:
-            _focus_transition(city, civ_is_at_war)
+    goal_map = {
+        "FARM":     IMP.FARM,
+        "MINE":     IMP.MINE,
+        "LUMBER":   IMP.LUMBER,
+        "QUARRY":   IMP.QUARRY,
+        "SMITHERY": IMP.SMITHERY,
+        "FORT":     IMP.FORT,
+    }
 
-    # ── Investment loop (per-city budget) ────────────────────────────────
-    if tick % INVEST_PERIOD_TICKS != 0:
+    if civ.goal_index >= len(civ.goal_queue):
+        civ.goal_index = 0
+    current_goal = civ.goal_queue[civ.goal_index]
+
+    # Goal expiration — nothing fulfilled in 300 ticks, move on.
+    if civ.goal_ticks > 300:
+        civ.goal_index = (civ.goal_index + 1) % len(civ.goal_queue)
+        civ.goal_ticks = 0
         return
 
-    # Precompute fort-placement context once per civ per tick.
-    territory_set = set(civ.territory)
-    enemy_ids: set = set()
-    for w in wars.values():
-        if w.att == civ.id:
-            enemy_ids.add(w.def_id)
-        elif w.def_id == civ.id:
-            enemy_ids.add(w.att)
+    # FOUND goals are handled in simulation.py — but unlike before we still
+    # let cities build production. The old code froze the whole civ, which
+    # left new cities stuck at 40 pop with no buildings while the civ saved
+    # for another settle. Cities still need farms to grow.
+    goal_imp = goal_map.get(current_goal)  # None for FOUND
 
-    # Does the civ already have any fort in its territory? (for the "always
-    # at least one" guarantee when the starter fort has fallen into ruin.)
-    has_any_fort = any(
-        imp_type(impr[c]) == IMP.FORT
-        for c in territory_set
-        if 0 <= c < N
-    )
-
+    any_built = False
     for city in civ.cities:
-        focus = city.focus
-        pref = _focus_preferred_types(focus)
-        upgrades_done = 0
-        # Each city gets up to INVEST_MAX_PER_TICK upgrade attempts per tick.
-        # We loop a few times so if a cheap upgrade succeeds we can consider
-        # another one in the same tick (bounded).
-        for _ in range(INVEST_MAX_PER_TICK):
-            cell = _pick_upgrade_candidate(city, impr, preferred_types=pref)
-            if cell is None:
+        # Struggling cities (no buildings at all) get extra tries so they
+        # never sit at the starvation floor forever.
+        budget = INVEST_MAX_PER_TICK
+        if _city_has_no_buildings(city, impr):
+            budget += 2
+        for _ in range(budget):
+            if not _try_one_action(city, goal_imp, impr):
                 break
-            raw = impr[cell]
-            lvl = imp_level(raw)
-            cost = _upgrade_cost(city, lvl)
-            if not _try_debit(city, cost):
-                break
-            impr[cell] = upgrade_imp(raw)
-            upgrades_done += 1
+            any_built = True
 
-        # ── Fort placement ───────────────────────────────────────────────
-        # Cities will build a brand new fort on an empty border tile when:
-        #   - the civ is at war, OR
-        #   - this city's focus is DEFENSE
-        # Counted per-city: don't spam forts, only one attempt per tick.
-        want_fort = (
-            civ_is_at_war
-            or focus == FOCUS.DEFENSE
-        )
-        if want_fort and om is not None:
-            # Roughly cap fort density: one fort per ~4 worked tiles in this city.
-            city_tiles = city.tiles
-            fort_here = sum(
-                1 for t in city_tiles
-                if 0 <= t < N and imp_type(impr[t]) == IMP.FORT
-            )
-            allowed_forts = max(1, len(city_tiles) // 4)
-            if fort_here < allowed_forts and random.random() < 0.35:
-                if _place_fort(city, civ, ter, impr, territory_set, enemy_ids, om):
-                    has_any_fort = True
-                    continue  # counted as this tick's build — skip normal placement
+    # Re-run employment so workers move into buildings placed this tick.
+    # Without this, new cells wait a whole tick before producing.
+    for city in civ.cities:
+        employment.update_city_employment(city, impr)
 
-        # Also: if the city couldn't find an upgrade, try to BUILD something
-        # new on an empty tile. This matters for young cities whose tiles
-        # start with nothing on them.
-        if upgrades_done == 0:
-            placed = _place_new_improvement(city, ter, res, rivers, impr)
-            if not placed:
-                # Finally, try an advanced structure (port/fishery/…)
-                _place_advanced_structure(city, ter, res, impr)
-
-        # ── Rare: rebuild a different improvement on an occupied tile ────
-        # Very low per-city chance. Only fires when upgrades aren't hogging
-        # the wealth budget so we don't fight with normal investment.
-        if random.random() < REBUILD_CHANCE:
-            _rebuild_improvement(city, ter, res, rivers, impr)
+    # Advance the civ goal when SOMEONE built this tick (keeps the queue
+    # from stalling but doesn't gate per-city work on it).
+    if any_built and goal_imp is not None:
+        civ.goal_index = (civ.goal_index + 1) % len(civ.goal_queue)
+        civ.goal_ticks = 0

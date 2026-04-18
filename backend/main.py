@@ -82,6 +82,10 @@ def _ser_map(md: MapData) -> dict:
         "hm":             [round(v, 3) for v in md.hm],
         "terrain_colors": {str(k): v for k, v in TERRAIN_COLORS.items()},
         "imp_colors":     {str(k): v for k, v in IMP_COLORS.items()},
+        "good_efficiency": {
+            g: [round(v, 3) for v in field]
+            for g, field in md.good_efficiency.items()
+        },
     }
 
 
@@ -101,22 +105,15 @@ def _ser_civs(civs: List[Civ]) -> list:
                 "population":     round(ci.population, 1),
                 "is_capital":     ci.is_capital,
                 "founded":        ci.founded,
-                "trade":          round(ci.trade, 1),
-                "trade_potential": round(ci.trade_potential, 1),
-                "road_trade":     round(ci.road_trade, 1),
-                "wealth":         round(ci.wealth, 1),
+                "gold":           round(ci.gold, 1),
+                "supply":         {k: round(v, 1) for k, v in ci.supply.items()},
+                "demand":         {k: round(v, 1) for k, v in ci.demand.items()},
+                "prices":         {k: round(v, 2) for k, v in ci.prices.items()},
+                "last_trades":    ci.last_trades,
                 "near_river":     ci.near_river,
                 "coastal":        ci.coastal,
                 "river_mouth":    ci.river_mouth,
-                "food_production": round(ci.food_production, 1),
-                "city_ore":       round(ci.city_ore, 1),
-                "city_stone":     round(ci.city_stone, 1),
-                "city_metal":     round(ci.city_metal, 1),
-                "city_ore_total":   round(ci.city_ore_total, 1),
-                "city_stone_total": round(ci.city_stone_total, 1),
-                "city_metal_total": round(ci.city_metal_total, 1),
                 "focus":          ci.focus,
-                "carrying_cap":   round(ci.carrying_cap, 0),
                 "tiles":          ci.tiles,
                 "farm_tiles":     ci.farm_tiles,
                 "staffing":       {str(k): v for k, v in ci.staffing.items()},
@@ -124,6 +121,17 @@ def _ser_civs(civs: List[Civ]) -> list:
                 "hp":             round(ci.hp, 1),
                 "max_hp":         round(ci.max_hp, 1),
                 "last_dmg_tick":  ci.last_dmg_tick,
+                "workforce":      ci.workforce,
+                "employed_pop":   ci.employed_pop,
+                "unemployed_pop": ci.unemployed_pop,
+                "income_domestic": {k: round(v, 2) for k, v in ci.income_domestic.items()},
+                "income_export":   {k: round(v, 2) for k, v in ci.income_export.items()},
+                "income_import":   {k: round(v, 2) for k, v in ci.income_import.items()},
+                "income_misc":    round(ci.income_misc, 2),
+                "income_total":   round(ci.income_total, 2),
+                "income_per_person": round(ci.income_per_person, 3),
+                "attractiveness": round(ci.attractiveness, 3),
+                "net_migration":  round(ci.net_migration, 2),
             } for ci in c.cities],
             "population":     round(c.population, 1),
             "military":       round(c.military, 1),
@@ -234,6 +242,7 @@ async def _sim_loop(ws: WebSocket, state: GameState, lock: asyncio.Lock):
                 new_civs = tick_sim(
                     civs, md.ter, md.res, state.om, state.wars,
                     md.rivers, state.impr, t, state.add_event, state.params,
+                    md.good_efficiency,
                 )
                 civs.extend(new_civs)
                 state.tick = t

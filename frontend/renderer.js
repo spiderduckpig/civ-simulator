@@ -33,7 +33,10 @@ const STAFFABLE_IMP_TYPES = new Set([1, 2, 3, 4, 5, 6, 8, 9, 10]);
 // Must match constants.N_EMPLOYEES_PER_LEVEL on the backend.
 const EMPLOYEES_PER_LEVEL = 20;
 
-function _impInfo(raw, cell, rivers, ter, ownerCity) {
+// Mirror of backend regions.IMP_PRIMARY_GOOD — which good each producer yields.
+const IMP_PRIMARY_GOOD = { 1: "food", 10: "food", 2: "ore", 4: "stone", 3: "lumber", 9: "metal" };
+
+function _impInfo(raw, cell, rivers, ter, ownerCity, goodEff) {
     if (!raw) return { name: "—", level: 0, detail: null, employees: null };
     const type = impType(raw);
     const lvl = impLevel(raw);
@@ -93,7 +96,18 @@ function _impInfo(raw, cell, rivers, ter, ownerCity) {
         let upCost = lvl < 5 ? "upgradable" : "(max)";
         detail = `🐟 ${food} food + ${s(lvl * 0.8 * staffFrac)} trade (max ${s(foodMax)}f) ${upCost}`;
     }
-    return { name, level: lvl, detail, employees };
+
+    // Local regional efficiency for the improvement's primary good (per employee unit).
+    let efficiency = null;
+    const primaryGood = IMP_PRIMARY_GOOD[type];
+    if (primaryGood && goodEff && goodEff[primaryGood]) {
+        const eff = goodEff[primaryGood][cell];
+        if (typeof eff === "number") {
+            const perEmp = maxEmp > 0 ? eff / maxEmp : 0;
+            efficiency = `🗺 Regional ${primaryGood} eff ×${eff.toFixed(2)} (${perEmp.toFixed(3)}/employee)`;
+        }
+    }
+    return { name, level: lvl, detail, employees, efficiency };
 }
 
 // ── Colour helpers ────────────────────────────────────────────────────────────
@@ -164,8 +178,8 @@ function _drawRiverRoad(ctx, seg, riverLw) {
 // ── Main render ───────────────────────────────────────────────────────────────
 
 export function renderFrame(ctx, mapData, state, opts = {}) {
-    const { showRes = true, mapMode = "terrain", tick = 0, zoom = 1, selectedCity = null } = opts;
-    const { ter, res, rivers, terrain_colors, imp_colors } = mapData;
+    const { showRes = true, mapMode = "terrain", resourceGood = "food", tick = 0, zoom = 1, selectedCity = null } = opts;
+    const { ter, res, rivers, terrain_colors, imp_colors, good_efficiency } = mapData;
     let { civs = [], wars = [], impr = [] } = state;
 
     // ── Pre-flight data checks ───────────────────────────────────────────────
@@ -193,6 +207,7 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
     }
 
     // ── Terrain fill ─────────────────────────────────────────────────────────
+    const effField = (mapMode === "resource" && good_efficiency) ? good_efficiency[resourceGood] : null;
     for (let y = 0; y < H; y++) {
         for (let x = 0; x < W; x++) {
             const i   = y * W + x;
@@ -202,6 +217,28 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
 
             if (mapMode === "political") {
                 ctx.fillStyle = civ ? civ.color : (t <= 2 ? terrain_colors[t] : "#2a2a2a");
+            } else if (mapMode === "resource" && effField) {
+                // Water stays dark; land gets a red→yellow→green heatmap on efficiency.
+                if (t <= 2) {
+                    ctx.fillStyle = terrain_colors[t];
+                } else {
+                    const e = effField[i] || 0;
+                    // normalise — biome×noise caps near ~2.0, clip [0, 1.6] → [0, 1]
+                    const n = Math.max(0, Math.min(1, e / 1.6));
+                    let r, g, b;
+                    if (n < 0.5) {
+                        const k = n / 0.5;
+                        r = (180 + k * 60) | 0;
+                        g = (30 + k * 170) | 0;
+                        b = 30;
+                    } else {
+                        const k = (n - 0.5) / 0.5;
+                        r = (240 - k * 200) | 0;
+                        g = (200 + k * 30) | 0;
+                        b = (30 + k * 40) | 0;
+                    }
+                    ctx.fillStyle = `rgb(${r},${g},${b})`;
+                }
             } else {
                 ctx.fillStyle = civ
                     ? blendColor(terrain_colors[t], civ.color, 0.55)
@@ -212,7 +249,7 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
     }
 
     // ── Improvements (zoomed in) ──────────────────────────────────────────────
-    if (zoom >= 1.3 && mapMode !== "political") {
+    if (zoom >= 1.3 && mapMode !== "political" && mapMode !== "resource") {
         for (let i = 0; i < W * H; i++) {
             const raw = impr[i];
             if (!raw) continue;
@@ -815,7 +852,7 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
 // ── Tooltip hit-test ──────────────────────────────────────────────────────────
 
 export function getCellInfo(mapData, state, cellIndex) {
-    const { ter, res, rivers, hm } = mapData;
+    const { ter, res, rivers, hm, good_efficiency } = mapData;
     const { civs = [], impr = [], wars = [] } = state;
 
     const om = new Int32Array(W * H);
@@ -952,31 +989,32 @@ export function getCellInfo(mapData, state, cellIndex) {
         city:    city ? {
             name: city.name,
             pop: city.population | 0,
-            trade: city.trade | 0,
-            trade_potential: city.trade_potential | 0,
-            road_trade: city.road_trade | 0,
-            food: city.food_production | 0,
-            cap: city.carrying_cap | 0,
-            tiles: city.tiles || [],
-            tiles: city.tiles || [],
-            farm_tiles: city.farm_tiles || [],
+            gold: city.gold | 0,
+            supply: city.supply || {},
+            demand: city.demand || {},
+            prices: city.prices || {},
+            last_trades: city.last_trades || {},
             is_capital: city.is_capital,
             near_river: city.near_river,
             coastal: city.coastal,
             river_mouth: city.river_mouth || false,
-            wealth: city.wealth | 0,
             cell: city.cell,
             founded: city.founded,
-            city_ore: city.city_ore | 0,
-            city_stone: city.city_stone | 0,
-            city_metal: city.city_metal | 0,
-            city_ore_total: city.city_ore_total | 0,
-            city_stone_total: city.city_stone_total | 0,
-            city_metal_total: city.city_metal_total | 0,
             focus: city.focus || 1,
             stats: cityStats,
+            workforce: city.workforce || 0,
+            employed_pop: city.employed_pop || 0,
+            unemployed_pop: city.unemployed_pop || 0,
+            income_domestic: city.income_domestic || {},
+            income_export: city.income_export || {},
+            income_import: city.income_import || {},
+            income_misc: city.income_misc || 0,
+            income_total: city.income_total || 0,
+            income_per_person: city.income_per_person || 0,
+            attractiveness: city.attractiveness ?? 1.0,
+            net_migration: city.net_migration ?? 0,
         } : null,
-        imp:     _impInfo(impr[cellIndex] || 0, cellIndex, rivers, ter, workingCity),
+        imp:     _impInfo(impr[cellIndex] || 0, cellIndex, rivers, ter, workingCity, good_efficiency),
         river:   rivers.cell_river.has(cellIndex),
         coastal,
     };

@@ -121,42 +121,6 @@ function cellCoastal(cell, ter) {
   }
   return false;
 }
-function cellRiverMouth(cell, ter, rivers) {
-  if (!rivers.cellRiver.has(cell)) return false;
-  if (ter[cell] <= T.COAST) return false;
-  for (const n of nb(cell)) {
-    if (n >= 0 && n < N && (ter[n] === T.OCEAN || ter[n] === T.COAST || ter[n] === T.DEEP)) return true;
-  }
-  return false;
-}
-
-function settleScore(cell, ter, rivers, res, allCityCells, params) {
-  const t = ter[cell];
-  if (t === T.MTN || t === T.SNOW || t === T.DESERT || t <= T.COAST) return null;
-  let score = 0;
-  if (allCityCells.length) {
-    let minD = Infinity;
-    for (const oc of allCityCells) { const d = dist(cell, oc); if (d < minD) minD = d; }
-    if (minD <= 2) score -= 500;
-    else if (minD <= 4) score -= 80 / minD;
-    else if (minD <= 7) score -= 30 / minD;
-    score += Math.min(minD * 0.3, 5);
-  }
-  if (cellRiverMouth(cell, ter, rivers)) score += 60;
-  else if (cellOnRiver(cell, rivers)) score += (params.riverPref || 10) * 1.5;
-  if (cellCoastal(cell, ter)) score += (params.coastPref || 5) * 1.5;
-  if (CAN_FARM.has(t)) score += 2;
-  if (res.has(cell)) score += 3;
-  return score;
-}
-
-function evalSettleCandidate(civ, cell, ter, rivers, res, allCityCells, params) {
-  const sc = settleScore(cell, ter, rivers, res, allCityCells, params);
-  if (sc !== null && sc > (civ._settleScore ?? -Infinity)) {
-    civ._settleCandidate = cell;
-    civ._settleScore = sc;
-  }
-}
 
 // ── Map Gen ────────────────────────────────────────────────────────
 function genMap(seed) {
@@ -263,6 +227,8 @@ function buildRoad(civ, ter) {
 }
 
 // ── Civ ────────────────────────────────────────────────────────────
+const MIN_CITY_DIST = 9;
+
 function findSpot(ter, civs, rng) {
   for (let a = 0; a < 600; a++) {
     const x = 5 + (((rng(a * 3.7, a * 2.1) + 1) / 2) * (W - 10)) | 0;
@@ -369,33 +335,42 @@ function tickSim(civs, ter, res, om, wars, rivers, impr, tick, addEv, params) {
       for (let a2 = 0; a2 < 4; a2++) { const c = cells[(Math.random() * cells.length) | 0]; if (impr[c] === IMP.NONE) { const bi = bestImp(ter, res, c); if (bi !== IMP.NONE) { impr[c] = bi; civ.gold -= 1.5; break; } } }
     }
 
-    // Gather all city cells once for settle scoring and city founding
-    const allCityCells = alive.flatMap(c => c.cities.map(ci => ci.cell));
-
-    // City founding — use cached settlement candidate from expansion
+    // City founding (rare — prefer growing existing)
     const largestCity = civ.cities.reduce((mx2, c) => c.population > mx2 ? c.population : mx2, 0);
     const shouldFound = civ.territory.size > (civ.cities.length + 1) * 35 && largestCity > 150 && civ.gold > 30 && civ.cities.length < Math.floor(civ.territory.size / 30) + 1;
-    const bestCell = civ._settleCandidate ?? -1;
-    if (shouldFound && bestCell !== -1 && civ.territory.has(bestCell)) {
-      const sc = settleScore(bestCell, ter, rivers, res, allCityCells, params);
-      if (sc !== null && sc > 0) {
+    if (shouldFound) {
+      let best = -1, bestScore = -Infinity;
+      const cells = [...civ.territory];
+      for (let a2 = 0; a2 < 60; a2++) {
+        const c = cells[(Math.random() * cells.length) | 0], t = ter[c];
+        if (t === T.MTN || t === T.SNOW || t === T.DESERT || t <= T.COAST) continue;
+        let minD = Infinity;
+        for (const ci of civ.cities) { const d = dist(c, ci.cell); if (d < minD) minD = d; }
+        if (minD < MIN_CITY_DIST) continue;
+        let score = minD * .5;
+        if (cellOnRiver(c, rivers)) score += params.riverPref * 1.5;
+        if (cellCoastal(c, ter)) score += params.coastPref * 1.5;
+        if (CAN_FARM.has(t)) score += 2;
+        if (res.has(c)) score += 3;
+        if (score > bestScore) { bestScore = score; best = c; }
+      }
+      if (best !== -1) {
         const cn = gCiN();
-        civ.cities.push({ cell: bestCell, name: cn, population: 25, isCapital: false, founded: tick, trade: 3, wealth: 3, nearRiver: cellOnRiver(bestCell, rivers), coastal: cellCoastal(bestCell, ter) });
+        civ.cities.push({ cell: best, name: cn, population: 25, isCapital: false, founded: tick, trade: 3, wealth: 3, nearRiver: cellOnRiver(best, rivers), coastal: cellCoastal(best, ter) });
         civ.gold -= 20; civ.events.push(`Year ${civ.age}: Founded ${cn}`); addEv(`🏘 Year ${tick}: ${civ.name} founded ${cn}`);
-        delete civ._settleCandidate; delete civ._settleScore;
       }
     }
 
     // Build roads
     if (civ.cities.length >= 2 && civ.gold > 12 && tick % 7 === 0) buildRoad(civ, ter);
 
-    // Expansion — score newly claimed tiles as settlement candidates
+    // Expansion
     if (civ.food > 15 && civ.population > civ.territory.size * 2 && Math.random() < civ.expansionRate * .2) {
       const borders = bdr(civ.territory);
       let targets = [...borders].filter(c => c >= 0 && c < N && isL(ter, c) && om[c] === 0);
       targets.sort((a, b) => { let sa = 0, sb = 0; if (res.has(a)) sa += 4; if (res.has(b)) sb += 4; if (cellOnRiver(a, rivers)) sa += params.riverPref * .5; if (cellOnRiver(b, rivers)) sb += params.riverPref * .5; if (ter[a] === T.PLAINS || ter[a] === T.GRASS) sa += 2; if (ter[b] === T.PLAINS || ter[b] === T.GRASS) sb += 2; if (ter[a] >= T.MTN) sa -= 3; if (ter[b] >= T.MTN) sb -= 3; return sb - sa; });
       const cnt = Math.min(((civ.territory.size * .03) | 0) + 1, targets.length, 3);
-      for (let i2 = 0; i2 < cnt; i2++) { civ.territory.add(targets[i2]); om[targets[i2]] = civ.id; evalSettleCandidate(civ, targets[i2], ter, rivers, res, allCityCells, params); }
+      for (let i2 = 0; i2 < cnt; i2++) { civ.territory.add(targets[i2]); om[targets[i2]] = civ.id; }
     }
 
     // War combat

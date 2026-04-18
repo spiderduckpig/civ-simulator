@@ -5,6 +5,7 @@ from .constants import W, H, N, T, RES_LIST, IMP
 from .noise import make_noise, fbm
 from .helpers import neighbors, is_land
 from .models import Rivers, MapData
+from .regions import gen_efficiency_maps
 
 
 # ── River generation ─────────────────────────────────────────────────────────
@@ -242,6 +243,9 @@ def gen_map(seed: int) -> MapData:
     rivers = gen_rivers(hm, ter, seed)
     impr   = [IMP.NONE] * N
 
+    # Per-good efficiency maps: biome × low-frequency regional noise.
+    good_efficiency = gen_efficiency_maps(ter, rivers, seed)
+
     return MapData(
         hm=hm,
         mm=mm,
@@ -250,4 +254,5 @@ def gen_map(seed: int) -> MapData:
         res=res,
         rivers=rivers,
         impr=impr,
+        good_efficiency=good_efficiency,
     )

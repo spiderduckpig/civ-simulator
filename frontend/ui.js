@@ -15,6 +15,7 @@ const btnPlay      = document.getElementById("btn-play");
 const btnReset     = document.getElementById("btn-reset");
 const selSpeed     = document.getElementById("sel-speed");
 const btnMapMode   = document.getElementById("btn-mapmode");
+const selResGood   = document.getElementById("sel-resource-good");
 const chkRes       = document.getElementById("chk-res");
 const chkLevels    = document.getElementById("chk-levels");
 const zoomIn       = document.getElementById("btn-zoom-in");
@@ -116,6 +117,7 @@ function renderAll() {
             showRes: chkRes.checked,
             showLevels: chkLevels.checked,
             mapMode,
+            resourceGood: selResGood.value,
             tick: gameState.tick,
             zoom,
             selectedCity,
@@ -155,7 +157,7 @@ function updateUI() {
                 ${atWar ? '<span class="war-badge">WAR</span>' : ""}
                 <span class="civ-size">${civ.territory.length}</span>
             </div>
-            <div class="civ-sub">${civ.cities.length}c · ${civ.population|0}p · ₿${civ.wealth|0}</div>
+            <div class="civ-sub">${civ.cities.length}c · ${civ.population|0}p · 💰${civ.gold|0}</div>
         </div>`;
     }).join("");
 
@@ -223,12 +225,9 @@ function renderCivDetail(civ, wars) {
         .sort((a, b) => b.population - a.population)
         .map(c => {
             const isSel = selectedCity && selectedCity.cell === c.cell;
-            const pct = c.carrying_cap > 0 ? Math.min(100, (c.population / c.carrying_cap * 100) | 0) : 0;
-            const capColor = pct > 90 ? "#f85149" : pct > 70 ? "#f0c040" : "#3fb950";
             return `<div class="detail-city${isSel ? " city-selected" : ""}" data-city-cell="${c.cell}">
                 ${c.is_capital ? "★" : "•"} <b>${c.name}</b>
-                <span>${c.population|0}/<span style="color:${capColor}">${c.carrying_cap|0}</span>
-                🍞${c.food_production|0} 📦${c.trade|0}
+                <span>${c.population|0}p · 💰${c.gold|0} · 🍞${c.supply["food"]|0}/${c.demand["food"]|0}
                 ${c.near_river ? "〰" : ""}${c.coastal ? "⚓" : ""}</span>
             </div>`;
         })
@@ -257,11 +256,11 @@ function renderCivDetail(civ, wars) {
         <div class="detail-stats">
             <div>👑 Leader: ${civ.leader}</div>
             <div>👥 Pop: ${civ.population|0} · ⚔ Military: ${civ.military|0} · 📐 Land: ${civ.territory.length}</div>
-            <div>💰 Gold: ${civ.gold|0} · ₿ Wealth: <span style="color:#f0c040">${civ.wealth|0}</span> · 🍞 Food: ${civ.food|0}</div>
+            <div>💰 Gold: ${civ.gold|0} · 🍞 Food Out: ${civ.farm_output|0}</div>
             <div>🔬 Tech: ${civ.tech.toFixed(1)} · 🎭 Culture: ${civ.culture.toFixed(1)}</div>
             <div>🛡 Integrity: <span style="color:${intColor}">${(civ.integrity*100)|0}%</span> · 💢 Aggressiveness: <span style="color:${aggrColor}">${(aggr*100)|0}%</span></div>
             <div>⚡ Power: ${civ.power|0}</div>
-            <div>🌾 Farm: ${civ.farm_output|0} · ⛏ Ore/Metal: ${civ.ore_output|0}/${civ.metal_output|0} · 📦 Trade: ${civ.trade_output|0} · 🛤 Roads: ${civ.roads.length}</div>
+            <div>⛏ Ore/Metal: ${civ.ore_output|0}/${civ.metal_output|0} · 🧱 Stone: ${civ.stone_output|0} · 🛤 Roads: ${civ.roads.length}</div>
             ${allyNames ? `<div>🤝 Allies: ${allyNames}</div>` : ""}
         </div>
         ${cities ? `<div class="detail-section-label">CITIES (${civ.cities.length})</div>${cities}` : ""}
@@ -468,6 +467,7 @@ function showTooltip(x, y, info) {
         info.coastal ? `<div style="color:#1a6a9e">⚓ Coastal</div>` : "",
         info.imp.name !== "—" ? `<div style="color:#c8a000">${info.imp.name} Lv.${info.imp.level}${info.imp.detail ? ` — ${info.imp.detail}` : ""}</div>` : "",
         info.imp.employees ? `<div style="color:#9a8fb8">${info.imp.employees}</div>` : "",
+        info.imp.efficiency ? `<div style="color:#8dd9c7">${info.imp.efficiency}</div>` : "",
         info.res   ? `<div>${info.res}</div>` : "",
         info.civ   ? `<div style="color:${info.civ.color};font-weight:600">${info.civ.name}</div>` : "",
     ];
@@ -482,9 +482,90 @@ function showTooltip(x, y, info) {
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
         if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
-        lines.push(`<div>👥 Pop ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
-        lines.push(`<div style="color:#8b949e">🍞 Food ${c.food} · 💰 Wealth ${c.wealth}</div>`);
-        lines.push(`<div style="color:#8b949e">📦 Trade ${c.trade} (potential ${c.trade_potential}, roads +${c.road_trade})</div>`);
+        lines.push(`<div>👥 Pop ${c.pop}${c.founded ? ` · Est. yr ${c.founded}` : ""} · 💰 Gold ${c.gold}</div>`);
+
+        // ── Employment ────────────────────────────────────────────────
+        const workforce = c.workforce | 0;
+        const employed = c.employed_pop | 0;
+        const unemployed = c.unemployed_pop | 0;
+        const unempColor = unemployed === 0 ? "#3fb950" : (unemployed > employed ? "#f85149" : "#f0c040");
+        lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Employment</div>`);
+        lines.push(`<div style="font-size:10px">💼 Workforce ${workforce * 20} · <span style="color:#3fb950">Employed ${employed}</span> · <span style="color:${unempColor}">Unemployed ${unemployed}</span></div>`);
+
+        // ── Migration ─────────────────────────────────────────────────
+        const pull = c.attractiveness ?? 1.0;
+        const netMig = c.net_migration ?? 0.0;
+        const pullColor = pull > 1.3 ? "#3fb950" : (pull < 0.7 ? "#f85149" : "#f0c040");
+        const migColor = netMig > 0.05 ? "#3fb950" : (netMig < -0.05 ? "#f85149" : "#8b949e");
+        const migArrow = netMig > 0.05 ? "↑" : (netMig < -0.05 ? "↓" : "·");
+        const migLabel = netMig > 0.05 ? `+${netMig.toFixed(1)} incoming` : (netMig < -0.05 ? `${netMig.toFixed(1)} leaving` : "steady");
+        lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Migration</div>`);
+        lines.push(`<div style="font-size:10px">🧭 Pull <span style="color:${pullColor}">${pull.toFixed(2)}</span> · <span style="color:${migColor}">${migArrow} ${migLabel}</span></div>`);
+
+        // ── Income breakdown ──────────────────────────────────────────
+        const incColor = c.income_total > 0 ? "#3fb950" : c.income_total < 0 ? "#f85149" : "#8b949e";
+        lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Income (gold/tick)</div>`);
+        lines.push(`<div style="font-size:10px">Net <span style="color:${incColor}">₿${c.income_total.toFixed(2)}</span> · Per person <span style="color:${incColor}">₿${c.income_per_person.toFixed(3)}</span></div>`);
+        const goodsIn = ["food", "lumber", "ore", "stone", "metal"];
+        const icons2 = {food:"🍞", lumber:"🪵", ore:"⚙", stone:"🧱", metal:"🗡"};
+        for (const g of goodsIn) {
+            const dom = c.income_domestic[g] || 0;
+            const exp = c.income_export[g] || 0;
+            const imp = c.income_import[g] || 0;
+            if (dom < 0.05 && exp < 0.05 && imp < 0.05) continue;
+            const net = dom + exp - imp;
+            const nColor = net >= 0 ? "#3fb950" : "#f85149";
+            const parts = [];
+            if (dom >= 0.05) parts.push(`<span style="color:#c9d1d9">prod ${dom.toFixed(1)}</span>`);
+            if (exp >= 0.05) parts.push(`<span style="color:#d299ff">exp +${exp.toFixed(1)}</span>`);
+            if (imp >= 0.05) parts.push(`<span style="color:#58a6ff">imp -${imp.toFixed(1)}</span>`);
+            lines.push(`<div style="font-size:9px; display:flex; justify-content:space-between">
+                <span>${icons2[g]} ${g}</span>
+                <span>${parts.join(" · ")} = <span style="color:${nColor}">${net.toFixed(1)}</span></span>
+            </div>`);
+        }
+        if (c.income_misc >= 0.05) {
+            lines.push(`<div style="font-size:9px">✦ Gold resource +${c.income_misc.toFixed(1)}</div>`);
+        }
+
+        const goods = ["food", "lumber", "ore", "stone", "metal"];
+        const icons = {food:"🍞", lumber:"🪵", ore:"⚙", stone:"🧱", metal:"🗡"};
+        
+        lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Local Market (Supply / Demand · Price)</div>`);
+
+        for (const g of goods) {
+            const supply = c.supply[g] || 0;
+            const demand = c.demand[g] || 0;
+            const price = c.prices[g] || 1.0;
+            const color = price < 1.0 ? "#3fb950" : (price > 2.0 ? "#f85149" : "#f0c040");
+
+            // Trade summary for this good — sum across all partners this tick
+            // so a city trading with 3 neighbours doesn't flicker between them.
+            let tradeLine = "";
+            const trades = c.last_trades[g];
+            if (trades && trades.length > 0) {
+                let totalVol = 0;
+                let priceSum = 0;
+                for (const [vol, , p] of trades) {
+                    totalVol += vol;
+                    priceSum += p * Math.abs(vol);
+                }
+                const absVol = Math.abs(totalVol);
+                if (absVol >= 0.05) {
+                    const avgP = priceSum / Math.max(0.001, trades.reduce((a, [v]) => a + Math.abs(v), 0));
+                    const type = totalVol > 0 ? "Import" : "Export";
+                    const tColor = totalVol > 0 ? "#58a6ff" : "#d299ff";
+                    const partners = trades.length > 1 ? `×${trades.length}` : "";
+                    tradeLine = `<span style="color:${tColor}; margin-left:4px; font-size:9px">[${type}${partners} ${absVol.toFixed(1)} @ ₿${avgP.toFixed(2)}]</span>`;
+                }
+            }
+
+            lines.push(`<div style="display:flex; justify-content:space-between; font-size:10px">
+                <span>${icons[g]} ${g.toUpperCase()}${tradeLine}</span>
+                <span><span style="color:#fff">${supply.toFixed(1)} / ${demand.toFixed(1)}</span> · <span style="color:${color}">₿${price.toFixed(2)}</span></span>
+            </div>`);
+        }
+
         if (s) {
             const imps = [];
             if (s.farms)      imps.push(`🌾 ${s.farms} farms${s.avgFarmLvl > 1 ? ` (avg Lv.${s.avgFarmLvl})` : ""}`);
@@ -606,16 +687,19 @@ selSpeed.addEventListener("change", () => {
     ws.send(JSON.stringify({ action: "speed", value: parseFloat(selSpeed.value) }));
 });
 
-const MAP_MODE_CYCLE = ["terrain", "political", "armies"];
-const MAP_MODE_LABEL = { terrain: "🌍 Ter", political: "🗺 Pol", armies: "⚔ Arm" };
-const MAP_MODE_BG    = { terrain: "#30363d", political: "#6c5ce7", armies: "#da3633" };
+const MAP_MODE_CYCLE = ["terrain", "political", "armies", "resource"];
+const MAP_MODE_LABEL = { terrain: "🌍 Ter", political: "🗺 Pol", armies: "⚔ Arm", resource: "📊 Res" };
+const MAP_MODE_BG    = { terrain: "#30363d", political: "#6c5ce7", armies: "#da3633", resource: "#1f6feb" };
 btnMapMode.addEventListener("click", () => {
     const idx = MAP_MODE_CYCLE.indexOf(mapMode);
     mapMode = MAP_MODE_CYCLE[(idx + 1) % MAP_MODE_CYCLE.length];
     btnMapMode.textContent = MAP_MODE_LABEL[mapMode];
     btnMapMode.style.background = MAP_MODE_BG[mapMode];
+    selResGood.style.display = mapMode === "resource" ? "" : "none";
     renderAll();
 });
+
+selResGood.addEventListener("change", renderAll);
 
 chkRes.addEventListener("change", renderAll);
 chkLevels.addEventListener("change", renderAll);

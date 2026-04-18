@@ -8,7 +8,7 @@ all at once — but new code should prefer attribute access.
 """
 
 from dataclasses import dataclass, field, asdict
-from typing import Set, List, Dict, Optional, Any
+from typing import Set, List, Dict, Optional, Any, Tuple
 
 
 class ModelMeta:
@@ -85,6 +85,9 @@ class MapData(ModelMeta):
     res: Dict[int, str] = field(default_factory=dict)
     rivers: Rivers = field(default_factory=Rivers)
     impr: List[int] = field(default_factory=list)   # bit-packed improvements
+    # Per-good efficiency map: {good: list[float] of length N}. Modulates
+    # each tile's raw production. See engine.regions.
+    good_efficiency: Dict[str, List[float]] = field(default_factory=dict)
 
 
 # ── City ────────────────────────────────────────────────────────────────────
@@ -96,36 +99,62 @@ class City(ModelMeta):
     population: float
     is_capital: bool
     founded: int
-    trade: float
-    wealth: float
     focus: int
     near_river: bool
     coastal: bool
-    food_production: float
-    carrying_cap: int
     tiles: List[int] = field(default_factory=list)
     farm_tiles: List[int] = field(default_factory=list)
     hp: float = 115.0
     max_hp: float = 115.0
     last_dmg_tick: int = -999
-    # ── Production accounting (refreshed each tick) ──
-    city_ore: float = 0.0
-    city_stone: float = 0.0
-    city_metal: float = 0.0
-    # ── Total production (before consumption) ──
-    city_ore_total: float = 0.0
-    city_stone_total: float = 0.0
-    city_metal_total: float = 0.0
+    # ── Economy (refreshed each tick) ──
+    prices: Dict[str, float] = field(default_factory=dict)
+    supply: Dict[str, float] = field(default_factory=dict)
+    demand: Dict[str, float] = field(default_factory=dict)
+    net_imports: Dict[str, float] = field(default_factory=dict)
+    gold:   float = 10.0
+
     trade_potential: float = 0.0
     road_trade: float = 0.0
     river_mouth: bool = False
     siege_immune_until: int = 0
     # Stash used between the production and trade passes within a single tick.
     _city_gold: float = 0.0
+    # Per-tick trade history for tooltips: {good: (volume, other_city_name, price)}
+    last_trades: Dict[str, List[Tuple[float, str, float]]] = field(default_factory=dict)
+
     # ── Employment ─────────────────────────────────
     # cell → how many building levels are staffed (<= building's level).
     staffing: Dict[int, int] = field(default_factory=dict)
     employee_level_count: int = 0
+    # Population-derived workforce snapshots (refreshed per tick).
+    workforce: int = 0
+    employed_pop: int = 0
+    unemployed_pop: int = 0
+
+    # ── Income ledger (refreshed each tick) ──
+    # Per-good gold flow buckets, so the UI can break down where money comes
+    # from. "domestic" is the share of consumer spending that ends up in the
+    # city treasury; "export"/"import" reflect trade receipts and payments.
+    income_domestic: Dict[str, float] = field(default_factory=dict)
+    income_export: Dict[str, float] = field(default_factory=dict)
+    income_import: Dict[str, float] = field(default_factory=dict)
+    income_misc: float = 0.0           # raw-gold resource cells, etc.
+    income_total: float = 0.0          # net gold gained this tick
+    income_per_person: float = 0.0
+    # Rolling window of income_per_person, used to smooth attractiveness.
+    income_per_person_hist: List[float] = field(default_factory=list)
+
+    # ── Migration ──────────────────────────────────
+    # Composite pull score (higher = immigrants want to move here). Computed
+    # from unemployment and rolling income.
+    attractiveness: float = 1.0
+    # Net flow of people this tick (+ incoming, − leaving).
+    net_migration: float = 0.0
+
+    # Average regional efficiency per good across this city's tiles.
+    # Refreshed each tick from MapData.good_efficiency.
+    local_efficiency: Dict[str, float] = field(default_factory=dict)
 
 
 # ── Civ ─────────────────────────────────────────────────────────────────────
@@ -163,8 +192,16 @@ class Civ(ModelMeta):
     events: List[str] = field(default_factory=list)
     parent_name: Optional[str] = None
     roads: List[Road] = field(default_factory=list)
-    metal_stock: float = 5.0
+    metal_stock: float = 0.0
     fort_cooldowns: Dict[int, int] = field(default_factory=dict)
+
+    # AI Strategy: Strict priority queue of objectives
+    goal_queue: List[str] = field(default_factory=lambda: [
+        "FARM", "FARM", "FOUND", "MINE", "FARM", "FOUND", "LUMBER", "FARM", "FOUND"
+    ])
+    goal_index: int = 0
+    goal_ticks: int = 0 # How long we've been on the current goal
+
     # Per-tick scratch state for the city-founding logic.
     _settle_candidate: int = -1
     _settle_score: float = float("-inf")

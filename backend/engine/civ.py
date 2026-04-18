@@ -249,19 +249,18 @@ def make_civ(
         population=80.0,
         is_capital=True,
         founded=tick,
-        trade=10.0,
-        wealth=20.0,
+        gold=40.0,
         focus=random.choice([FOCUS.FARMING, FOCUS.MINING, FOCUS.DEFENSE]),
         near_river=cell_on_river(spot, rivers),
         coastal=cell_coastal(spot, ter),
-        food_production=0.0,
-        carrying_cap=200,
-        tiles=[],
-        farm_tiles=[],
-        hp=115.0,
-        max_hp=115.0,
         last_dmg_tick=-999,
     )
+
+    # Initial farms so the city can produce food immediately
+    if impr is not None:
+        for n in neighbors(spot):
+            if n in territory and impr[n] == IMP.NONE and ter[n] in CAN_FARM:
+                impr[n] = make_imp(IMP.FARM, 1)
 
     return Civ(
         id=cid,

@@ -176,15 +176,9 @@ FORT_HP_BONUS         = 25.0       # per level when a fort sits on the same cell
 CITY_HP_REGEN         = 0.6        # per tick when not under attack
 
 # ── City development (investment) ────────────────────────────────────────────
-# Upgrades are paid from a city's own wealth stockpile. Costs are scale-free:
-# they are expressed as a fraction of the city's current wealth, not as a
-# fixed number of gold. This keeps the investment loop sensible regardless
-# of how food/trade numbers are tuned later.
-INVEST_COST_BASE_FRAC   = 0.12   # baseline: a level-1 upgrade costs 12% of current city wealth
-INVEST_COST_LEVEL_POW   = 1.35   # cost scales by (level ** this) for higher tiers
-INVEST_MIN_WEALTH_FLOOR = 6.0    # absolute floor so cities can still upgrade in early game
-INVEST_MAX_PER_TICK     = 1      # at most this many upgrades per city per investment tick
-INVEST_PERIOD_TICKS     = 3      # how often a city attempts investment
+# Upgrades are paid from a city's own gold stockpile + physical materials.
+INVEST_MAX_PER_TICK     = 3      # allow multiple actions if budget permits
+INVEST_PERIOD_TICKS     = 2      # check every tick
 
 FOCUS_HMM_PERIOD        = 12     # how often a city reconsiders its focus
 
@@ -192,7 +186,21 @@ FOCUS_HMM_PERIOD        = 12     # how often a city reconsiders its focus
 # Buildings take workers. A level-K building can be staffed up to K levels
 # (one level = ``N_EMPLOYEES_PER_LEVEL`` people). Production scales with the
 # fraction of levels that are actually staffed. See engine.employment.
-N_EMPLOYEES_PER_LEVEL   = 20
+N_EMPLOYEES_PER_LEVEL   = 10
+
+# ── Economy ──
+GOODS = ["food", "lumber", "ore", "stone", "metal"]
+BASE_PRICES = {
+    "food":   1.0,
+    "lumber": 2.0,
+    "ore":    3.0,
+    "stone":  6.0,
+    "metal":  10.0,
+}
+
+# Trade / Arbitrage constants
+TRADE_PERIOD_TICKS = 5
+TRANSPORT_COST_PER_DIST = 0.5
 
 DEFAULT_PARAMS = {
     "river_pref":  3.0,
