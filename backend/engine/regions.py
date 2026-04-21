@@ -65,7 +65,7 @@ _BIOME_EFF: Dict[str, Dict[int, float]] = {
 }
 
 # Food near rivers gets a direct bump (fertile valleys).
-_RIVER_GRAIN_BONUS = 0.35
+_RIVER_GRAIN_BONUS = 0.6
 
 # Regional noise frequency. Smaller → larger contiguous regions. 0.06 gives
 # features roughly 16-20 cells across on a 160×100 map — big enough that a

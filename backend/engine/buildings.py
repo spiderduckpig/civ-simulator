@@ -16,17 +16,17 @@ BUILDING_TYPES: dict[str, BuildingType] = {
         cost_resources={"lumber", "stone", "metal"},
         # Per staffed level per tick.
         inputs={"fabric": 5.0},
-        outputs={"clothes": 1.0},
+        outputs={"clothes": 3.0},
     ),
     "tailor_guild": BuildingType(
         key="tailor_guild",
         name="Tailor Guild",
-        max_level=20,
+        max_level=5,
         staffable=True,
         cost_resources={"lumber", "fabric"},
         # Smaller workshop, better conversion than heavy factory.
         inputs={"fabric": 2.0},
-        outputs={"clothes": 0.85},
+        outputs={"clothes": 1.5},
     ),
     "foundry": BuildingType(
         key="foundry",
@@ -34,17 +34,17 @@ BUILDING_TYPES: dict[str, BuildingType] = {
         max_level=20,
         staffable=True,
         cost_resources={"stone", "copper"},
-        inputs={"copper_ore": 2.4, "stone": 0.25},
-        outputs={"copper": 1.25},
+        inputs={"copper_ore": 2.0, "stone": 0.25},
+        outputs={"copper": 3.0},
     ),
     "grain_mill": BuildingType(
         key="grain_mill",
         name="Grain Mill",
-        max_level=24,
+        max_level=100,
         staffable=True,
         cost_resources={"lumber", "stone", "copper"},
-        inputs={"grain": 3.2},
-        outputs={"bread": 1.35},
+        inputs={"grain": 5.0},
+        outputs={"bread": 10},
     ),
     "artisan_works": BuildingType(
         key="artisan_works",
@@ -54,6 +54,33 @@ BUILDING_TYPES: dict[str, BuildingType] = {
         cost_resources={"lumber", "stone", "fabric"},
         inputs={"lumber": 0.9, "fabric": 0.8},
         outputs={"clothes": 0.75},
+    ),
+    "paper_mill": BuildingType(
+        key="paper_mill",
+        name="Paper Mill",
+        max_level=10,
+        staffable=True,
+        cost_resources={"lumber", "stone", "fabric"},
+        inputs={"lumber": 2.5, "fabric": 0.2},
+        outputs={"paper": 3.0}
+    ),
+    "housing": BuildingType(
+        key="housing",
+        name="Housing Construction",
+        max_level=100,
+        staffable=False,
+        cost_resources={"lumber"},
+        inputs={"lumber": 6.0, "stone": 2.5, "fabric": 1.5},
+        outputs={"housing": 10.0}
+    ),
+    "shipyard": BuildingType(
+        key="shipyard",
+        name="Shipyard",
+        max_level=10,
+        staffable=False,
+        cost_resources={"lumber"},
+        inputs={"lumber": 10.0, "fabric": 4.0},
+        outputs={"ships": 2.0}
     ),
 }
 

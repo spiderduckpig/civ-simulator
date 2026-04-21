@@ -4,7 +4,7 @@ This module instantiates all ImprovementType, Good, and Resource models,
 making it easy to add new ones without modifying multiple constant dicts.
 """
 
-from .constants import IMP, GOODS, BASE_PRICES, IMP_COLORS, IMP_NAMES, RESOURCE_ICONS
+from .constants import IMP, GOODS, GOOD_SPECS, IMP_COLORS, IMP_NAMES, RESOURCE_ICONS
 from .models import ImprovementType, Good, Resource
 
 
@@ -89,6 +89,7 @@ def _build_goods() -> dict:
     registry = {}
     
     for good_name in GOODS:
+        spec = GOOD_SPECS[good_name]
         # Find which improvements produce this good
         produced_by = [
             type_id for type_id, good in _IMP_PRODUCES.items()
@@ -96,9 +97,9 @@ def _build_goods() -> dict:
         ]
         
         registry[good_name] = Good(
-            name=good_name.capitalize(),
-            base_price=BASE_PRICES.get(good_name, 1.0),
-            icon="📦",  # Default icon; can be customized per good
+            name=spec.label,
+            base_price=spec.base_price,
+            icon=spec.icon,
             produced_by=produced_by,
         )
     

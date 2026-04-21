@@ -1,4 +1,6 @@
-W, H, CELL = 160, 100, 6
+from .models import GoodSpec, GovernmentOwnershipProfile
+
+W, H, CELL = 120, 80, 6
 PX_W, PX_H = W * CELL, H * CELL
 N = W * H
 
@@ -113,6 +115,32 @@ IMP_NAMES = {
     IMP.COTTON:   "Cotton Farm",
 }
 
+# Government-owned asset catalogs.
+GOV_IMPROVEMENT_PROFILES: dict[str, GovernmentOwnershipProfile] = {
+    "fort": GovernmentOwnershipProfile(
+        key="fort",
+        label="Fort",
+        imp_type=IMP.FORT,
+        upkeep_goods={
+            "copper": 8.0,
+            "bread": 10.0,
+            "clothes": 5.0,
+        },
+        buffer_on=1.5,
+        buffer_off=0.5,
+    ),
+}
+
+GOV_BUILDING_PROFILES: dict[str, GovernmentOwnershipProfile] = {
+    # Future: "library": GovernmentOwnershipProfile(...)
+}
+
+# Serialized form for payloads/frontend consumption.
+GOV_OWNERSHIP_PROFILES = {
+    "improvements": {k: v.to_dict() for k, v in GOV_IMPROVEMENT_PROFILES.items()},
+    "buildings": {k: v.to_dict() for k, v in GOV_BUILDING_PROFILES.items()},
+}
+
 # City focus — what the city prioritises. Biases its build queue and the
 # improvements it will accept on its tiles. The HMM transition logic lives
 # in city_dev.py.
@@ -181,7 +209,9 @@ CITY_HP_REGEN         = 0.6        # per tick when not under attack
 # ── City development (investment) ────────────────────────────────────────────
 # Upgrades are paid from a city's own gold stockpile + physical materials.
 INVEST_MAX_PER_TICK     = 3      # allow multiple actions if budget permits
-INVEST_PERIOD_TICKS     = 2      # check every tick
+INVEST_PERIOD_TICKS     = 10     # city investment is slow-moving
+GOV_CONSTRUCTION_PERIOD  = 25     # slow government planning/check cycle
+FORT_REOPEN_TREASURY_MIN = 5000.0 # inactive forts stay closed until treasury recovers
 
 FOCUS_HMM_PERIOD        = 12     # how often a city reconsiders its focus
 
@@ -192,21 +222,38 @@ FOCUS_HMM_PERIOD        = 12     # how often a city reconsiders its focus
 N_EMPLOYEES_PER_LEVEL   = 10
 
 # ── Economy ──
-GOODS = ["grain", "bread", "lumber", "copper_ore", "stone", "copper", "fabric", "clothes"]
-BASE_PRICES = {
-    "grain":  1.0,
-    "bread":  2.2,
-    "lumber": 2.0,
-    "copper_ore": 3.0,
-    "stone":  6.0,
-    "copper": 9.0,
-    "fabric": 4.0,
-    "clothes": 8.0,
+GOOD_SPECS: dict[str, GoodSpec] = {
+    "grain": GoodSpec("grain", "Grain", "🌾", 1.0, tradable=True),
+    "bread": GoodSpec("bread", "Bread", "🍞", 2.2, tradable=True),
+    "lumber": GoodSpec("lumber", "Lumber", "🪵", 2.0, tradable=True),
+    "copper_ore": GoodSpec("copper_ore", "Copper Ore", "⛏", 3.0, tradable=True),
+    "stone": GoodSpec("stone", "Stone", "🧱", 6.0, tradable=True),
+    "copper": GoodSpec("copper", "Copper", "🔶", 9.0, tradable=True),
+    "fabric": GoodSpec("fabric", "Fabric", "🧵", 4.0, tradable=True),
+    "clothes": GoodSpec("clothes", "Clothes", "👕", 8.0, tradable=True),
+    "paper": GoodSpec("paper", "Paper", "📜", 5.0, tradable=True),
+    "housing": GoodSpec("housing", "Housing", "🏠", 10.0, tradable=False),
+    "ships": GoodSpec("ships", "Ships", "⛵", 20.0, tradable=True),
 }
+
+GOODS = list(GOOD_SPECS.keys())
+BASE_PRICES = {k: spec.base_price for k, spec in GOOD_SPECS.items()}
+GOOD_META = {
+    k: {"label": spec.label, "icon": spec.icon, "tradable": spec.tradable}
+    for k, spec in GOOD_SPECS.items()
+}
+TRADABLE_GOODS = [
+    good for good in GOODS
+    if GOOD_META.get(good, {}).get("tradable", True)
+]
 
 # Trade / Arbitrage constants
 TRADE_PERIOD_TICKS = 5
 TRANSPORT_COST_PER_DIST = 0.5
+
+# Expansion cap: civs stop claiming new territory once they exceed this
+# tiles-per-city ratio (until they found/capture more cities).
+MAX_TILES_PER_CITY_FOR_EXPANSION = 90.0
 
 DEFAULT_PARAMS = {
     "river_pref":  3.0,

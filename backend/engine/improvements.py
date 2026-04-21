@@ -51,7 +51,7 @@ def downgrade_imp(raw: int) -> int:
 # they scale further than other types.
 MAX_LEVELS = {
     IMP.FARM:     20,
-    IMP.COTTON:   10,
+    IMP.COTTON:   30,
     IMP.MINE:     5,
     IMP.QUARRY:   5,
     IMP.LUMBER:   5,

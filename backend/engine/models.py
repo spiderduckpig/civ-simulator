@@ -155,12 +155,55 @@ class City(ModelMeta):
     # Composite pull score (higher = immigrants want to move here). Computed
     # from unemployment and rolling income.
     attractiveness: float = 1.0
-    # Net flow of people this tick (+ incoming, − leaving).
+    # Per-tick migration flow (+ incoming, − leaving).
     net_migration: float = 0.0
 
     # Average regional efficiency per good across this city's tiles.
     # Refreshed each tick from MapData.good_efficiency.
     local_efficiency: Dict[str, float] = field(default_factory=dict)
+
+
+# ── Government ─────────────────────────────────────────────────────────────
+
+@dataclass
+class FortFunding(ModelMeta):
+    active: bool = True
+    buffer: float = 1.5
+    last_upkeep_value: float = 0.0
+
+
+@dataclass
+class GovernmentConstructionOrder(ModelMeta):
+    asset_key: str
+    asset_label: str
+    priority: float = 0.0
+    target_civ_id: Optional[int] = None
+    target_civ_name: str = ""
+    host_city_cell: Optional[int] = None
+    host_city_name: str = ""
+    relation: float = 0.0
+    estimated_upkeep: float = 0.0
+    estimated_spending: float = 0.0
+    reason: str = ""
+    status: str = "queued"
+
+
+@dataclass
+class Government(ModelMeta):
+    tax_rate: float = 0.12
+    treasury: float = 0.0
+    last_tax_collected: float = 0.0
+    last_build_spending: float = 0.0
+    last_fort_spending: float = 0.0
+    fort_upkeep_goods: Dict[str, float] = field(default_factory=dict)
+    fort_buffer_on: float = 1.5
+    fort_buffer_off: float = 0.5
+    construction_queue: List[GovernmentConstructionOrder] = field(default_factory=list)
+    forts: Dict[int, FortFunding] = field(default_factory=dict)
+    # Generic ownership containers for future government-owned assets.
+    # forts remains for compatibility and mirrors owned_improvements["fort"].
+    owned_improvements: Dict[str, Dict[int, FortFunding]] = field(default_factory=dict)
+    owned_city_buildings: Dict[int, Dict[str, int]] = field(default_factory=dict)
 
 
 # ── Civ ─────────────────────────────────────────────────────────────────────
@@ -198,8 +241,12 @@ class Civ(ModelMeta):
     events: List[str] = field(default_factory=list)
     parent_name: Optional[str] = None
     roads: List[Road] = field(default_factory=list)
+    government: Government = field(default_factory=Government)
     metal_stock: float = 0.0
     fort_cooldowns: Dict[int, int] = field(default_factory=dict)
+    disposition: str = "calm"
+    disposition_ticks: int = 0
+    disposition_targets: List[int] = field(default_factory=list)
 
     # AI Strategy: Strict priority queue of objectives
     goal_queue: List[str] = field(default_factory=lambda: [
@@ -275,6 +322,32 @@ class Good(ModelMeta):
     base_price: float
     icon: str
     produced_by: List[int] = field(default_factory=list)
+
+
+@dataclass
+class GoodSpec(ModelMeta):
+    """Canonical specification for a market good.
+
+    This is the single source of truth used to derive price tables,
+    frontend labels/icons, and tradability flags.
+    """
+    key: str
+    label: str
+    icon: str
+    base_price: float
+    tradable: bool = True
+
+
+@dataclass
+class GovernmentOwnershipProfile(ModelMeta):
+    """Catalog entry describing one government-ownable asset type."""
+    key: str
+    label: str
+    upkeep_goods: Dict[str, float] = field(default_factory=dict)
+    imp_type: Optional[int] = None
+    building_key: Optional[str] = None
+    buffer_on: float = 1.5
+    buffer_off: float = 0.5
 
 
 # ── Map resources (deposit goods) ────────────────────────────────────────────

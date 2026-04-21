@@ -3,22 +3,34 @@
  * Receives game state from the server and paints it.
  */
 
-const W = 160, H = 100, CELL = 6;
+let W = 160, H = 100, CELL = 6;
 
-// Terrain names for the tooltip
-const TERRAIN_NAMES = {
-    0:"Deep Ocean", 1:"Ocean", 2:"Coast", 3:"Beach", 4:"Plains",
-    5:"Grassland",  6:"Forest", 7:"Dense Forest", 8:"Hills",
-    9:"Mountains",  10:"Snow Peak", 11:"Desert", 12:"Tundra",
-    13:"Jungle",    14:"Swamp",
-};
+// Keep frontend metadata generic; concrete names/icons come from backend map payload.
+const FALLBACK_RESOURCE_ICON = "?";
 
-const RESOURCE_ICONS = {
-    iron:"⛏", gold:"✦", horses:"🐎", wheat:"🌾", fish:"🐟",
-    gems:"💎", wood:"🪵", stone:"🪨", spices:"🌶", ivory:"🦷", fabric:"🧵",
-};
+function terrainName(mapData, terrainId) {
+    const names = mapData?.terrain_names;
+    if (names) {
+        return names[String(terrainId)] ?? names[terrainId] ?? `Terrain ${terrainId}`;
+    }
+    return `Terrain ${terrainId}`;
+}
 
-const IMP_NAMES = { 0:"—", 1:"Farm", 2:"Mine", 3:"Lumber", 4:"Quarry", 5:"Pasture", 6:"Windmill", 7:"Fort", 8:"Port", 9:"Smithery", 10:"Fishery", 11:"Cotton Farm" };
+function improvementName(mapData, impTypeId) {
+    const names = mapData?.imp_names;
+    if (names) {
+        return names[String(impTypeId)] ?? names[impTypeId] ?? `Improvement ${impTypeId}`;
+    }
+    return `Improvement ${impTypeId}`;
+}
+
+function resourceIcon(mapData, resourceType) {
+    const icons = mapData?.resource_icons;
+    if (icons) {
+        return icons[resourceType] ?? FALLBACK_RESOURCE_ICON;
+    }
+    return FALLBACK_RESOURCE_ICON;
+}
 
 // Bit-packed improvement encoding: low 5 bits = type (0-31), rest = level-1.
 const IMP_TYPE_BITS = 5;
@@ -26,21 +38,38 @@ const IMP_TYPE_MASK = (1 << IMP_TYPE_BITS) - 1;
 function impType(raw)  { return raw & IMP_TYPE_MASK; }
 function impLevel(raw) { return (raw >> IMP_TYPE_BITS) + 1; }
 
-// Staffable building types (mirror of engine.employment.STAFFABLE_TYPES).
-// Forts are intentionally excluded — they take metal upkeep, not workers.
-const STAFFABLE_IMP_TYPES = new Set([1, 2, 3, 4, 5, 6, 8, 9, 10, 11]);
+function getStaffableImprovementTypes(mapData) {
+    const raw = mapData?.staffable_imp_types;
+    if (Array.isArray(raw)) {
+        return new Set(raw.map((v) => Number(v)).filter((v) => Number.isFinite(v)));
+    }
+    return new Set();
+}
 
-// Must match constants.N_EMPLOYEES_PER_LEVEL on the backend.
-const EMPLOYEES_PER_LEVEL = 20;
+function getEmployeesPerLevel(mapData) {
+    const n = Number(mapData?.employee_per_level);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+}
 
-// Mirror of backend regions.IMP_PRIMARY_GOOD — which good each producer yields.
-const IMP_PRIMARY_GOOD = { 1: "grain", 10: "grain", 11: "fabric", 2: "copper_ore", 4: "stone", 3: "lumber", 9: "copper" };
+function getPrimaryGoodByImprovement(mapData) {
+    const raw = mapData?.imp_primary_good;
+    const out = {};
+    if (!raw || typeof raw !== "object") return out;
+    for (const [k, v] of Object.entries(raw)) {
+        out[Number(k)] = v;
+    }
+    return out;
+}
 
-function _impInfo(raw, cell, rivers, ter, ownerCity, goodEff) {
+function _impInfo(raw, cell, rivers, ter, ownerCity, goodEff, mapData) {
+        const staffableTypes = getStaffableImprovementTypes(mapData);
+        const employeesPerLevel = getEmployeesPerLevel(mapData);
+        const primaryGoodByImprovement = getPrimaryGoodByImprovement(mapData);
+
     if (!raw) return { name: "—", level: 0, detail: null, employees: null };
     const type = impType(raw);
     const lvl = impLevel(raw);
-    const name = IMP_NAMES[type] || "—";
+    const name = improvementName(mapData, type);
     const onRiver = rivers.cell_river.has(cell);
     const riv = onRiver ? 2.0 : 1.0;
     let isCoastal = false;
@@ -56,10 +85,10 @@ function _impInfo(raw, cell, rivers, ter, ownerCity, goodEff) {
         if (typeof v === "number") staffLvl = Math.min(v, lvl);
     }
     const staffFrac = lvl > 0 ? staffLvl / lvl : 0;
-    const maxEmp = lvl * EMPLOYEES_PER_LEVEL;
-    const curEmp = staffLvl * EMPLOYEES_PER_LEVEL;
+    const maxEmp = lvl * employeesPerLevel;
+    const curEmp = staffLvl * employeesPerLevel;
     let employees = null;
-    if (STAFFABLE_IMP_TYPES.has(type)) {
+    if (staffableTypes.has(type)) {
         employees = `👥 Employees ${curEmp} / ${maxEmp} (${staffLvl}/${lvl} staffed)`;
     }
 
@@ -104,7 +133,7 @@ function _impInfo(raw, cell, rivers, ter, ownerCity, goodEff) {
 
     // Local regional efficiency for the improvement's primary good (per employee unit).
     let efficiency = null;
-    const primaryGood = IMP_PRIMARY_GOOD[type];
+    const primaryGood = primaryGoodByImprovement[type];
     if (primaryGood && goodEff && goodEff[primaryGood]) {
         const eff = goodEff[primaryGood][cell];
         if (typeof eff === "number") {
@@ -129,6 +158,13 @@ function blendColor(hex1, hex2, ratio) {
     const [r1, g1, b1] = hexToRgb(hex1);
     const [r2, g2, b2] = hexToRgb(hex2);
     return `rgb(${(r1*(1-ratio)+r2*ratio)|0},${(g1*(1-ratio)+g2*ratio)|0},${(b1*(1-ratio)+b2*ratio)|0})`;
+}
+
+function _syncMapDimensions(mapData) {
+    if (!mapData) return;
+    if (Number.isFinite(mapData.width) && mapData.width > 0) W = mapData.width | 0;
+    if (Number.isFinite(mapData.height) && mapData.height > 0) H = mapData.height | 0;
+    if (Number.isFinite(mapData.cell_size) && mapData.cell_size > 0) CELL = mapData.cell_size;
 }
 
 // ── Neighbour lookup (cardinal) ───────────────────────────────────────────────
@@ -183,6 +219,7 @@ function _drawRiverRoad(ctx, seg, riverLw) {
 // ── Main render ───────────────────────────────────────────────────────────────
 
 export function renderFrame(ctx, mapData, state, opts = {}) {
+    _syncMapDimensions(mapData);
     const { showRes = true, mapMode = "terrain", resourceGood = "grain", tick = 0, zoom = 1, selectedCity = null } = opts;
     const { ter, res, rivers, terrain_colors, imp_colors, good_efficiency } = mapData;
     let { civs = [], wars = [], impr = [] } = state;
@@ -558,7 +595,7 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
         ctx.textBaseline  = "middle";
         for (const [idxStr, type] of Object.entries(res)) {
             const i = parseInt(idxStr);
-            ctx.fillText(RESOURCE_ICONS[type], (i % W) * CELL + CELL / 2, ((i / W) | 0) * CELL + CELL / 2);
+            ctx.fillText(resourceIcon(mapData, type), (i % W) * CELL + CELL / 2, ((i / W) | 0) * CELL + CELL / 2);
         }
     }
 
@@ -857,6 +894,7 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
 // ── Tooltip hit-test ──────────────────────────────────────────────────────────
 
 export function getCellInfo(mapData, state, cellIndex) {
+    _syncMapDimensions(mapData);
     const { ter, res, rivers, hm, good_efficiency } = mapData;
     const { civs = [], impr = [], wars = [] } = state;
 
@@ -988,7 +1026,7 @@ export function getCellInfo(mapData, state, cellIndex) {
     return {
         x:       cellIndex % W,
         y:       (cellIndex / W) | 0,
-        terrain: TERRAIN_NAMES[ter[cellIndex]],
+        terrain: terrainName(mapData, ter[cellIndex]),
         alt:     (hm[cellIndex] * 100) | 0,
         res:     res[cellIndex],
         civ:     civ ? { name: civ.name, color: civ.color } : null,
@@ -1025,7 +1063,7 @@ export function getCellInfo(mapData, state, cellIndex) {
             attractiveness: city.attractiveness ?? 1.0,
             net_migration: city.net_migration ?? 0,
         } : null,
-        imp:     _impInfo(impr[cellIndex] || 0, cellIndex, rivers, ter, workingCity, good_efficiency),
+        imp:     _impInfo(impr[cellIndex] || 0, cellIndex, rivers, ter, workingCity, good_efficiency, mapData),
         river:   rivers.cell_river.has(cellIndex),
         coastal,
     };

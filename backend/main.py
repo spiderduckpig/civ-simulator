@@ -4,6 +4,7 @@ Runs the simulation loop and streams state to the browser via WebSocket.
 """
 
 import asyncio
+import importlib
 import json
 import mimetypes
 import random as stdlib_random
@@ -20,17 +21,36 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from engine.constants import N, W, H, IMP, DEFAULT_PARAMS, TERRAIN_COLORS, IMP_COLORS
+from engine.constants import (
+    N, W, H, CELL, IMP, GOODS, GOOD_META, DEFAULT_PARAMS, N_EMPLOYEES_PER_LEVEL,
+    TERRAIN_COLORS, IMP_COLORS, TERRAIN_NAMES, IMP_NAMES, RESOURCE_ICONS,
+    GOV_OWNERSHIP_PROFILES,
+)
 from engine.buildings import BUILDING_TYPES
 from engine.mapgen import gen_map
 from engine.civ import make_civ, reset_counters
 from engine.simulation import tick_sim
 from engine.noise import make_noise
+from engine.employment import STAFFABLE_TYPES
+from engine.regions import IMP_PRIMARY_GOOD
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("civitas")
 
+MAIN_PERF_LOG_PERIOD = 250
+
+try:
+    _ORJSON = importlib.import_module("orjson")
+except ImportError:
+    _ORJSON = None
+
 app = FastAPI()
+
+
+def _dumps_json(payload: dict) -> str:
+    if _ORJSON is not None:
+        return _ORJSON.dumps(payload).decode("utf-8")
+    return json.dumps(payload, separators=(",", ":"))
 
 
 # ── Game state ─────────────────────────────────────────────────────────────
@@ -75,6 +95,11 @@ def _do_reset(state: GameState, seed: int):
 def _ser_map(md: MapData) -> dict:
     return {
         "type":           "map",
+        "width":          W,
+        "height":         H,
+        "cell_size":      CELL,
+        "goods":          GOODS,
+        "good_meta":      GOOD_META,
         "ter":            md.ter,
         "res":            {str(k): v for k, v in md.res.items()},
         "rivers": {
@@ -84,6 +109,13 @@ def _ser_map(md: MapData) -> dict:
         "hm":             [round(v, 3) for v in md.hm],
         "terrain_colors": {str(k): v for k, v in TERRAIN_COLORS.items()},
         "imp_colors":     {str(k): v for k, v in IMP_COLORS.items()},
+        "terrain_names":  {str(k): v for k, v in TERRAIN_NAMES.items()},
+        "imp_names":      {str(k): v for k, v in IMP_NAMES.items()},
+        "resource_icons": RESOURCE_ICONS,
+        "government_profiles": GOV_OWNERSHIP_PROFILES,
+        "employee_per_level": N_EMPLOYEES_PER_LEVEL,
+        "staffable_imp_types": sorted(int(v) for v in STAFFABLE_TYPES),
+        "imp_primary_good": {str(k): v for k, v in IMP_PRIMARY_GOOD.items()},
         "good_efficiency": {
             g: [round(v, 3) for v in field]
             for g, field in md.good_efficiency.items()
@@ -161,6 +193,8 @@ def _ser_civs(civs: List[Civ]) -> list:
             "alive":          c.alive,
             "integrity":      round(c.integrity, 3),
             "aggressiveness": round(c.aggressiveness, 3),
+            "disposition":    getattr(c, "disposition", "calm"),
+            "disposition_ticks": int(getattr(c, "disposition_ticks", 0)),
             "power":          round(c.power, 1),
             "relations":      {str(k): round(v, 3) for k, v in c.relations.items()},
             "allies":         sorted(c.allies),
@@ -176,6 +210,63 @@ def _ser_civs(civs: List[Civ]) -> list:
             "roads":          [{"from": r.from_cell, "to": r.to_cell} for r in c.roads],
             "road_paths":     [r.path for r in c.roads],
             "metal_stock":    round(c.metal_stock, 1),
+            "government": {
+                "tax_rate": round(getattr(getattr(c, "government", None), "tax_rate", 0.0), 3),
+                "treasury": round(getattr(getattr(c, "government", None), "treasury", 0.0), 2),
+                "last_tax_collected": round(getattr(getattr(c, "government", None), "last_tax_collected", 0.0), 2),
+                "last_build_spending": round(getattr(getattr(c, "government", None), "last_build_spending", 0.0), 2),
+                "last_fort_spending": round(getattr(getattr(c, "government", None), "last_fort_spending", 0.0), 2),
+                "construction_queue": [
+                    {
+                        "asset_key": order.asset_key,
+                        "asset_label": order.asset_label,
+                        "priority": round(order.priority, 2),
+                        "target_civ_id": order.target_civ_id,
+                        "target_civ_name": order.target_civ_name,
+                        "host_city_cell": order.host_city_cell,
+                        "host_city_name": order.host_city_name,
+                        "relation": round(order.relation, 3),
+                        "estimated_upkeep": round(order.estimated_upkeep, 2),
+                        "estimated_spending": round(order.estimated_spending, 2),
+                        "reason": order.reason,
+                        "status": order.status,
+                    }
+                    for order in getattr(getattr(c, "government", None), "construction_queue", [])
+                ],
+                "fort_upkeep_goods": {
+                    k: round(v, 1)
+                    for k, v in getattr(getattr(c, "government", None), "fort_upkeep_goods", {}).items()
+                },
+                "fort_buffer_on": round(getattr(getattr(c, "government", None), "fort_buffer_on", 0.0), 2),
+                "fort_buffer_off": round(getattr(getattr(c, "government", None), "fort_buffer_off", 0.0), 2),
+                "forts": [
+                    {
+                        "cell": cell,
+                        "active": state.active,
+                        "buffer": round(state.buffer, 2),
+                        "last_upkeep_value": round(state.last_upkeep_value, 2),
+                    }
+                    for cell, state in getattr(getattr(c, "government", None), "forts", {}).items()
+                ],
+                "owned_assets": {
+                    "improvements": {
+                        asset_key: [
+                            {
+                                "cell": cell,
+                                "active": state.active,
+                                "buffer": round(state.buffer, 2),
+                                "last_upkeep_value": round(state.last_upkeep_value, 2),
+                            }
+                            for cell, state in states.items()
+                        ]
+                        for asset_key, states in getattr(getattr(c, "government", None), "owned_improvements", {}).items()
+                    },
+                    "buildings": {
+                        str(city_cell): holdings
+                        for city_cell, holdings in getattr(getattr(c, "government", None), "owned_city_buildings", {}).items()
+                    },
+                },
+            },
         })
     return result
 
@@ -266,7 +357,7 @@ async def _sim_loop(ws: WebSocket, state: GameState, lock: asyncio.Lock):
                 civs.extend(new_civs)
                 state.tick = t
                 tick_ms = (time.perf_counter() - tick_t0) * 1000.0
-                if t % 50 == 0:
+                if t % MAIN_PERF_LOG_PERIOD == 0:
                     alive_civs = sum(1 for c in civs if c.alive)
                     alive_cities = sum(len(c.cities) for c in civs if c.alive)
                     log.info(
@@ -276,7 +367,7 @@ async def _sim_loop(ws: WebSocket, state: GameState, lock: asyncio.Lock):
                         alive_civs,
                         alive_cities,
                     )
-                payload = json.dumps(_ser_state(state))
+                payload = _dumps_json(_ser_state(state))
 
             await ws.send_text(payload)
     except asyncio.CancelledError:
@@ -302,8 +393,8 @@ async def websocket_endpoint(ws: WebSocket):
         await asyncio.to_thread(_do_reset, state, state.seed)
         log.info("Map ready — sending to client")
 
-        await ws.send_text(json.dumps(_ser_map(state.map_data)))
-        await ws.send_text(json.dumps(_ser_state(state)))
+        await ws.send_text(_dumps_json(_ser_map(state.map_data)))
+        await ws.send_text(_dumps_json(_ser_state(state)))
         log.info("Initial state sent")
 
         while True:
@@ -333,8 +424,8 @@ async def websocket_endpoint(ws: WebSocket):
                     seed = msg.get("seed", int(stdlib_random.random() * 99999))
                     log.info("Resetting (seed=%d) ...", seed)
                     await asyncio.to_thread(_do_reset, state, seed)
-                    await ws.send_text(json.dumps(_ser_map(state.map_data)))
-                    await ws.send_text(json.dumps(_ser_state(state)))
+                    await ws.send_text(_dumps_json(_ser_map(state.map_data)))
+                    await ws.send_text(_dumps_json(_ser_state(state)))
                     log.info("Reset complete")
 
                 elif action == "speed":
@@ -344,7 +435,7 @@ async def websocket_endpoint(ws: WebSocket):
                     state.params.update(msg.get("values", {}))
 
                 elif action == "get_state":
-                    await ws.send_text(json.dumps(_ser_state(state)))
+                    await ws.send_text(_dumps_json(_ser_state(state)))
 
     except WebSocketDisconnect:
         log.info("WebSocket disconnected")

@@ -5,8 +5,17 @@
 
 import { renderFrame, getCellInfo } from "./renderer.js";
 
-const W = 160, H = 100, CELL = 6;
-const PX_W = W * CELL, PX_H = H * CELL;
+let W = 160, H = 100, CELL = 6;
+let PX_W = W * CELL, PX_H = H * CELL;
+
+function syncMapDimensions() {
+    if (!mapData) return;
+    if (Number.isFinite(mapData.width) && mapData.width > 0) W = mapData.width | 0;
+    if (Number.isFinite(mapData.height) && mapData.height > 0) H = mapData.height | 0;
+    if (Number.isFinite(mapData.cell_size) && mapData.cell_size > 0) CELL = mapData.cell_size;
+    PX_W = W * CELL;
+    PX_H = H * CELL;
+}
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const canvas       = document.getElementById("map");
@@ -57,6 +66,37 @@ let hoverScreenX = 0;
 let hoverScreenY = 0;
 let ws           = null;
 
+function getGoodMeta() {
+    return (mapData && mapData.good_meta && typeof mapData.good_meta === "object")
+        ? mapData.good_meta
+    : {};
+}
+
+function getGoodKeys() {
+    if (mapData && Array.isArray(mapData.goods) && mapData.goods.length) {
+        return mapData.goods;
+    }
+    return Object.keys(getGoodMeta());
+}
+
+function goodIcon(good) {
+    return getGoodMeta()[good]?.icon || "•";
+}
+
+function goodLabel(good) {
+    if (getGoodMeta()[good]?.label) return getGoodMeta()[good].label;
+    return String(good).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function populateResourceGoodSelect() {
+    const prev = selResGood.value;
+    const goods = getGoodKeys();
+    selResGood.innerHTML = goods.map(g => `<option value="${g}">${goodIcon(g)} ${goodLabel(g)}</option>`).join("");
+    if (goods.includes(prev)) {
+        selResGood.value = prev;
+    }
+}
+
 // Size canvas to fill its container, re-run on resize
 const mapWrap = document.getElementById("map-wrap");
 function resizeCanvas() {
@@ -92,6 +132,8 @@ function connect() {
         if (msg.type === "map") {
             mapData = msg;
             mapData.rivers.cell_river = new Set(msg.rivers.cell_river);
+            syncMapDimensions();
+            populateResourceGoodSelect();
             connStatus.textContent = "Map received";
             connStatus.style.color = "#3fb950";
         } else if (msg.type === "state") {
@@ -112,6 +154,7 @@ function connect() {
 
 function renderAll() {
     if (!mapData) return;
+    syncMapDimensions();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
     ctx.translate(viewOffset.x, viewOffset.y);
@@ -189,7 +232,8 @@ function updateUI() {
         }
     }
 
-    renderSelectedCityPanel(selectedCity);
+    const selectedCiv = selectedId !== null ? gameState.civs.find(c => c.id === selectedId) : null;
+    renderSelectedCityPanel(selectedCity, selectedCiv || null);
 
     // Civ detail panel
     if (selectedId !== null) {
@@ -228,7 +272,7 @@ function updateUI() {
     });
 }
 
-function renderSelectedCityPanel(city) {
+function renderSelectedCityPanel(city, civ) {
     if (!city) {
         cityPanel.style.display = "none";
         cityPanelBody.innerHTML = "";
@@ -243,8 +287,7 @@ function renderSelectedCityPanel(city) {
     else if (city.near_river) tags.push("〰 River");
     if (city.coastal) tags.push("⚓ Coast");
 
-    const goods = ["grain", "bread", "fabric", "clothes", "lumber", "copper_ore", "stone", "copper"];
-    const icons = {grain:"🌾", bread:"🍞", fabric:"🧵", clothes:"👕", lumber:"🪵", copper_ore:"⛏", stone:"🧱", copper:"🔶"};
+    const goods = getGoodKeys();
 
     const goodsRows = goods.map(g => {
         const s = city.supply[g] || 0;
@@ -272,7 +315,7 @@ function renderSelectedCityPanel(city) {
             }
         }
 
-        return `<div style="display:flex;justify-content:space-between;font-size:10px"><span>${icons[g]} ${g.toUpperCase()}${tradeLine}</span><span>${s.toFixed(1)} / ${d.toFixed(1)} · <span style="color:${c}">₿${p.toFixed(2)}</span></span></div>`;
+        return `<div style="display:flex;justify-content:space-between;font-size:10px"><span>${goodIcon(g)} ${goodLabel(g).toUpperCase()}${tradeLine}</span><span>${s.toFixed(1)} / ${d.toFixed(1)} · <span style="color:${c}">₿${p.toFixed(2)}</span></span></div>`;
     }).join("");
 
     const bDetails = city.building_details || [];
@@ -300,11 +343,108 @@ function renderSelectedCityPanel(city) {
     const migArrow = netMig > 0.05 ? "↑" : (netMig < -0.05 ? "↓" : "·");
     const migLabel = netMig > 0.05 ? `+${netMig.toFixed(1)} incoming` : (netMig < -0.05 ? `${netMig.toFixed(1)} leaving` : "steady");
 
+    let governmentSection = "";
+    if (city.is_capital && civ && civ.government) {
+        const gov = civ.government;
+        const disposition = String(civ.disposition || "calm");
+        const dispTicks = Number(civ.disposition_ticks || 0);
+        const dispositionLabel = disposition.charAt(0).toUpperCase() + disposition.slice(1);
+        const dispositionColor = disposition === "aggressive"
+            ? "#f85149"
+            : (disposition === "fortifying" ? "#f0c040" : "#3fb950");
+        const taxRate = gov.tax_rate || 0;
+        const treasury = gov.treasury || 0;
+        const revenue = gov.last_tax_collected || 0;
+        const buildSpend = gov.last_build_spending || 0;
+        const fortSpend = gov.last_fort_spending || 0;
+        const netGov = revenue - fortSpend;
+        const netGovColor = netGov >= 0 ? "#3fb950" : "#f85149";
+
+        const queueRows = (gov.construction_queue || []).slice(0, 4).map(order => {
+            const statusColor = order.status === "built" ? "#3fb950" : (order.status?.startsWith("blocked") ? "#f85149" : "#f0c040");
+            return `<div style="margin-top:4px;padding:4px;border:1px solid #30363d;border-radius:4px;background:#0b1016">
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                    <span>${order.asset_label || order.asset_key} near ${order.target_civ_name || "?"}</span>
+                    <span style="color:${statusColor}">${order.status || "queued"}</span>
+                </div>
+                <div style="font-size:9px;color:#8b949e">prio ${Number(order.priority || 0).toFixed(1)} · host ${order.host_city_name || "?"} · rel ${Number(order.relation || 0).toFixed(2)}</div>
+                <div style="font-size:9px;color:#8b949e">spend ₿${Number(order.estimated_spending || 0).toFixed(2)} · upkeep ₿${Number(order.estimated_upkeep || 0).toFixed(2)}</div>
+                <div style="font-size:9px;color:#8b949e">${order.reason || ""}</div>
+            </div>`;
+        }).join("");
+
+        const upkeepRows = Object.entries(gov.fort_upkeep_goods || {}).map(([good, qty]) => {
+            return `<div style="display:flex;justify-content:space-between;margin-top:3px;font-size:9px">
+                <span>${goodIcon(good)} ${goodLabel(good)}</span>
+                <span>${qty.toFixed(1)} / fort / tick</span>
+            </div>`;
+        }).join("");
+
+        const fortRows = (gov.forts || []).map(f => {
+            const raw = gameState.impr?.[f.cell] || 0;
+            const fType = raw & 31;
+            const level = raw > 0 && fType === 7 ? ((raw >> 5) + 1) : 0;
+            const statusColor = f.active ? "#3fb950" : "#f85149";
+            return `<div style="margin-top:4px;padding:4px;border:1px solid #30363d;border-radius:4px;background:#0b1016">
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                    <span>🏯 Fort @${f.cell} · Lv.${level || "?"}</span>
+                    <span style="color:${statusColor}">${f.active ? "active" : "inactive"}</span>
+                </div>
+                <div style="font-size:9px;color:#8b949e">buffer ${f.buffer.toFixed(2)} · last upkeep ₿${(f.last_upkeep_value || 0).toFixed(2)}</div>
+            </div>`;
+        }).join("") || `<div style="font-size:9px;color:#8b949e">No forts under government control.</div>`;
+
+        const ownedImprovementRows = Object.entries(gov.owned_assets?.improvements || {})
+            .map(([assetKey, assets]) => {
+                const profile = mapData?.government_profiles?.improvements?.[assetKey] || {};
+                const label = profile.label || String(assetKey).replace(/_/g, " ");
+                if (!Array.isArray(assets) || assets.length === 0) {
+                    return `<div style="font-size:9px;color:#8b949e">${label}: none</div>`;
+                }
+                return `<div style="margin-top:4px">
+                    <div style="font-size:9px;color:#8b949e">${label}</div>
+                    ${assets.map(a => {
+                        const statusColor = a.active ? "#3fb950" : "#f85149";
+                        return `<div style="display:flex;justify-content:space-between;font-size:9px;padding-left:6px">
+                            <span>cell ${a.cell}</span>
+                            <span style="color:${statusColor}">${a.active ? "active" : "inactive"}</span>
+                        </div>`;
+                    }).join("")}
+                </div>`;
+            }).join("");
+
+        const ownedBuildingRows = Object.entries(gov.owned_assets?.buildings || {})
+            .map(([cityCell, holdings]) => {
+                const entries = Object.entries(holdings || {});
+                if (!entries.length) return "";
+                return `<div style="font-size:9px;margin-top:3px">city ${cityCell}: ${entries.map(([k, v]) => `${k} Lv.${v}`).join(", ")}</div>`;
+            }).join("");
+
+        governmentSection = `
+        <div class="city-panel-section">
+            <div class="city-panel-section-label">Government (Capital)</div>
+            <div>🏛 Treasury <span style="color:#58a6ff">₿${treasury.toFixed(2)}</span></div>
+            <div>🧠 Disposition <span style="color:${dispositionColor}">${dispositionLabel}</span> · for ${dispTicks} ticks</div>
+            <div>💸 Revenue ₿${revenue.toFixed(2)}/t · Build Spend ₿${buildSpend.toFixed(2)} · Fort Spend ₿${fortSpend.toFixed(2)}/t · Net <span style="color:${netGovColor}">₿${netGov.toFixed(2)}/t</span></div>
+            <div style="margin-top:4px;font-size:9px;color:#8b949e">Policy snapshot: tax ${ (taxRate * 100).toFixed(1) }% · activation on ${ (gov.fort_buffer_on || 0).toFixed(2) } · off ${ (gov.fort_buffer_off || 0).toFixed(2) }</div>
+            <div style="margin-top:6px;font-size:9px;color:#8b949e">Government construction queue</div>
+            ${queueRows || `<div style="font-size:9px;color:#8b949e">No construction queued.</div>`}
+            <div style="margin-top:6px;font-size:9px;color:#8b949e">Fort upkeep basket (per funded fort/tick)</div>
+            ${upkeepRows || `<div style="font-size:9px;color:#8b949e">No upkeep goods configured.</div>`}
+            <div style="margin-top:6px;font-size:9px;color:#8b949e">Government-owned forts</div>
+            ${fortRows}
+            <div style="margin-top:6px;font-size:9px;color:#8b949e">Government-owned improvements</div>
+            ${ownedImprovementRows || `<div style="font-size:9px;color:#8b949e">None</div>`}
+            <div style="margin-top:6px;font-size:9px;color:#8b949e">Government-owned city buildings</div>
+            ${ownedBuildingRows || `<div style="font-size:9px;color:#8b949e">None</div>`}
+        </div>`;
+    }
+
     cityPanelBody.innerHTML = `
         <div class="city-panel-title">🏘 ${city.name}</div>
         <div class="city-panel-sub">${tags.join(" · ") || "City"}</div>
         <div>👥 Pop ${city.population|0} · 💰 Gold ${city.gold|0}</div>
-        <div>💼 Workforce ${workforce * 20} · Employed ${employed} · Unemployed ${unemployed}</div>
+        <div>💼 Workforce ${workforce} · Employed ${employed} · Unemployed ${unemployed}</div>
         <div>📈 Net Income <span style="color:${netColor}">₿${net.toFixed(2)}/t</span> · Per Person ₿${(city.income_per_person || 0).toFixed(3)}</div>
         <div>🧭 Pull <span style="color:${pullColor}">${pull.toFixed(2)}</span> · <span style="color:${migColor}">${migArrow} ${migLabel}</span></div>
 
@@ -317,6 +457,7 @@ function renderSelectedCityPanel(city) {
             <div class="city-panel-section-label">Buildings</div>
             ${buildingRows}
         </div>
+        ${governmentSection}
     `;
 }
 
@@ -534,6 +675,7 @@ canvas.addEventListener("mousemove", e => {
         return;
     }
     if (!mapData) return;
+    syncMapDimensions();
     const mx  = (e.clientX - rect.left - viewOffset.x) / zoom;
     const my  = (e.clientY - rect.top  - viewOffset.y) / zoom;
     const gx  = (mx / CELL) | 0;
@@ -552,6 +694,7 @@ canvas.addEventListener("click", e => {
         return;
     }
     const rect = canvas.getBoundingClientRect();
+    syncMapDimensions();
     const mx  = (e.clientX - rect.left - viewOffset.x) / zoom;
     const my  = (e.clientY - rect.top  - viewOffset.y) / zoom;
     const gx  = (mx / CELL) | 0;
@@ -608,7 +751,7 @@ function showTooltip(x, y, info) {
         const unemployed = c.unemployed_pop | 0;
         const unempColor = unemployed === 0 ? "#3fb950" : (unemployed > employed ? "#f85149" : "#f0c040");
         lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Employment</div>`);
-        lines.push(`<div style="font-size:10px">💼 Workforce ${workforce * 20} · <span style="color:#3fb950">Employed ${employed}</span> · <span style="color:${unempColor}">Unemployed ${unemployed}</span></div>`);
+        lines.push(`<div style="font-size:10px">💼 Workforce ${workforce} · <span style="color:#3fb950">Employed ${employed}</span> · <span style="color:${unempColor}">Unemployed ${unemployed}</span></div>`);
 
         // ── Migration ─────────────────────────────────────────────────
         const pull = c.attractiveness ?? 1.0;
@@ -624,8 +767,7 @@ function showTooltip(x, y, info) {
         const incColor = c.income_total > 0 ? "#3fb950" : c.income_total < 0 ? "#f85149" : "#8b949e";
         lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Income (gold/tick)</div>`);
         lines.push(`<div style="font-size:10px">Net <span style="color:${incColor}">₿${c.income_total.toFixed(2)}</span> · Per person <span style="color:${incColor}">₿${c.income_per_person.toFixed(3)}</span></div>`);
-        const goodsIn = ["grain", "bread", "fabric", "clothes", "lumber", "copper_ore", "stone", "copper"];
-        const icons2 = {grain:"🌾", bread:"🍞", fabric:"🧵", clothes:"👕", lumber:"🪵", copper_ore:"⛏", stone:"🧱", copper:"🔶"};
+        const goodsIn = getGoodKeys();
         for (const g of goodsIn) {
             const dom = c.income_domestic[g] || 0;
             const exp = c.income_export[g] || 0;
@@ -638,7 +780,7 @@ function showTooltip(x, y, info) {
             if (exp >= 0.05) parts.push(`<span style="color:#d299ff">exp +${exp.toFixed(1)}</span>`);
             if (imp >= 0.05) parts.push(`<span style="color:#58a6ff">imp -${imp.toFixed(1)}</span>`);
             lines.push(`<div style="font-size:9px; display:flex; justify-content:space-between">
-                <span>${icons2[g]} ${g}</span>
+                <span>${goodIcon(g)} ${g}</span>
                 <span>${parts.join(" · ")} = <span style="color:${nColor}">${net.toFixed(1)}</span></span>
             </div>`);
         }
@@ -646,8 +788,7 @@ function showTooltip(x, y, info) {
             lines.push(`<div style="font-size:9px">✦ Gold resource +${c.income_misc.toFixed(1)}</div>`);
         }
 
-        const goods = ["grain", "bread", "fabric", "clothes", "lumber", "copper_ore", "stone", "copper"];
-        const icons = {grain:"🌾", bread:"🍞", fabric:"🧵", clothes:"👕", lumber:"🪵", copper_ore:"⛏", stone:"🧱", copper:"🔶"};
+        const goods = getGoodKeys();
         
         lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Local Market (Supply / Demand · Price)</div>`);
 
@@ -679,7 +820,7 @@ function showTooltip(x, y, info) {
             }
 
             lines.push(`<div style="display:flex; justify-content:space-between; font-size:10px">
-                <span>${icons[g]} ${g.toUpperCase()}${tradeLine}</span>
+                <span>${goodIcon(g)} ${g.toUpperCase()}${tradeLine}</span>
                 <span><span style="color:#fff">${supply.toFixed(1)} / ${demand.toFixed(1)}</span> · <span style="color:${color}">₿${price.toFixed(2)}</span></span>
             </div>`);
         }

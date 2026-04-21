@@ -97,10 +97,12 @@ RESOURCE_TILE_EFFECTS: dict[str, dict[str, float | bool]] = {
 
 CITY_BASE_DEMAND_PER_POP: dict[str, float] = {
     "grain": 0.08,
-    "fabric": 0.006,
-    "clothes": 0.004,
+    "fabric": 0.002,
+    "clothes": 0.005,
     "lumber": 0.015,
     "stone": 0.01,
+    "paper": 0.002,
+    "housing": 0.01
 }
 
 FORT_METAL_DEMAND_PER_TILE = 1.5
@@ -113,7 +115,7 @@ SUBSTITUTE_GROUPS: tuple[dict[str, object], ...] = (
         "base_good": "grain",
         "members": {
             "grain": 1.0,
-            "bread": 1.25,
+            "bread": 1.8,
         },
     },
 )

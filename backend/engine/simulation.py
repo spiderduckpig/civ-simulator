@@ -10,7 +10,9 @@ from typing import List, Callable, Optional, Dict
 
 from .constants import (
     W, H, N, T, IMP, CAN_FARM, FOCUS,
-    FORT_METAL_UPKEEP, CITY_HP_REGEN,
+    FORT_METAL_UPKEEP, CITY_HP_REGEN, N_EMPLOYEES_PER_LEVEL,
+    TRADABLE_GOODS, GOV_CONSTRUCTION_PERIOD,
+    MAX_TILES_PER_CITY_FOR_EXPANSION,
 )
 from .helpers import (
     neighbors, is_land, border_cells, dist,
@@ -19,6 +21,11 @@ from .helpers import (
 from .improvements import imp_type, imp_level, downgrade_imp
 from .mapgen import cell_coastal, cell_river_mouth
 from .models import City, Civ, War, Road, Rivers
+from .government import (
+    sync_fort_funding, fort_host_city, collect_tax, update_fort_funding,
+    refresh_government_construction_queue,
+    execute_government_construction,
+)
 
 from .civ import gen_city_name, build_road
 from . import combat
@@ -31,15 +38,17 @@ from .employment import staffed_level
 log = logging.getLogger("civitas.simulation")
 
 # Performance controls (tick-based cadence and adaptive solver limits).
-PERF_LOG_PERIOD = 50
-WORKER_REALLOC_PERIOD = 10
-MIGRATION_PERIOD = 5
+PERF_LOG_PERIOD = 250
+EMPLOYMENT_PERIOD = 5
+WORKER_REALLOC_PERIOD = 20
+MIGRATION_PERIOD = 20
+LOCAL_EFFICIENCY_PERIOD = 50
+BUILDING_PROFIT_PERIOD = 25
 from .buildings import BUILDING_TYPES
 from .economy_profiles import (
     IMPROVEMENT_ECONOMY,
     RESOURCE_TILE_EFFECTS,
     CITY_BASE_DEMAND_PER_POP,
-    FORT_METAL_DEMAND_PER_TILE,
     SUBSTITUTE_GROUPS,
 )
 
@@ -145,6 +154,9 @@ def _settle_peace(war, a, b, om, civs, tick, add_event):
     att.cities  = [c for c in att.cities  if c.cell in att.territory]
     defn.cities = [c for c in defn.cities if c.cell in defn.territory]
 
+    _touch_city_layout(att)
+    _touch_city_layout(defn)
+
     # Peace treaty disbands all armies
     war.armies_a = []
     war.armies_d = []
@@ -189,9 +201,11 @@ def _get_price(good: str, supply: float, demand: float) -> float:
 def _apply_substitute_demands(city: City) -> None:
     """Reallocate base-good demand across substitute goods.
 
-    Allocation uses weighted availability so higher-preference substitutes
-    (e.g., bread) receive a larger demand share at similar availability.
+    Allocation is preference-first with a mild availability boost so
+    substitutes with little current supply (e.g., newly introduced bread)
+    still retain non-zero demand.
     """
+    avail_weight = 0.35
     for group in SUBSTITUTE_GROUPS:
         base_good = str(group.get("base_good", ""))
         members = dict(group.get("members", {}))
@@ -203,7 +217,8 @@ def _apply_substitute_demands(city: City) -> None:
         score_sum = 0.0
         for good, pref in members.items():
             avail = max(0.0, city.supply.get(good, 0.0))
-            score = (avail + 0.01) * max(0.01, float(pref))
+            preference = max(0.01, float(pref))
+            score = preference * (1.0 + avail_weight * math.sqrt(avail))
             scores[good] = score
             score_sum += score
 
@@ -214,6 +229,10 @@ def _apply_substitute_demands(city: City) -> None:
             city.demand[good] = 0.0
         for good, score in scores.items():
             city.demand[good] += base_demand * (score / score_sum)
+
+
+def _touch_city_layout(civ: Civ) -> None:
+    civ._layout_version = getattr(civ, "_layout_version", 0) + 1
 
 
 def _tick_trade(
@@ -247,6 +266,29 @@ def _tick_trade(
             continue
 
         cities = civ.cities
+        city_state = []
+        for city in cities:
+            supply = city.supply
+            demand = city.demand
+            price_row = {}
+            surplus_row = {}
+            deficit_row = {}
+            surplus_keys = set()
+            deficit_keys = set()
+            for good in TRADABLE_GOODS:
+                eff_supply = supply.get(good, 0.0) + city.net_imports.get(good, 0.0)
+                eff_demand = demand.get(good, 0.0)
+                price_row[good] = _get_price(good, eff_supply, eff_demand)
+                if eff_supply > eff_demand + 0.05:
+                    surplus_row[good] = eff_supply - eff_demand
+                    surplus_keys.add(good)
+                elif eff_demand > eff_supply + 0.05:
+                    deficit_row[good] = eff_demand - eff_supply
+                    deficit_keys.add(good)
+            city_state.append((city, price_row, surplus_row, deficit_row, surplus_keys, deficit_keys))
+
+        state_by_city = {city.cell: (price_row, surplus_row, deficit_row, surplus_keys, deficit_keys) for city, price_row, surplus_row, deficit_row, surplus_keys, deficit_keys in city_state}
+
         # Precompute distances once.
         pair_cost = []
         for i in range(len(cities)):
@@ -260,12 +302,11 @@ def _tick_trade(
             # Build candidates using CURRENT effective prices.
             candidates = []
             for c1, c2, cost in pair_cost:
-                for good in GOODS:
-                    s1 = c1.supply.get(good, 0.0) + c1.net_imports.get(good, 0.0)
-                    d1 = c1.demand.get(good, 0.0)
-                    s2 = c2.supply.get(good, 0.0) + c2.net_imports.get(good, 0.0)
-                    d2 = c2.demand.get(good, 0.0)
-                    gap = abs(_get_price(good, s1, d1) - _get_price(good, s2, d2))
+                p1, s1, d1, s1_keys, d1_keys = state_by_city[c1.cell]
+                p2, s2, d2, s2_keys, d2_keys = state_by_city[c2.cell]
+                goods = (s1_keys & d2_keys) | (s2_keys & d1_keys)
+                for good in goods:
+                    gap = abs(p1.get(good, 0.0) - p2.get(good, 0.0))
                     if gap <= cost:
                         continue
                     candidates.append((gap, c1, c2, good, cost))
@@ -284,14 +325,14 @@ def _tick_trade(
 
             any_trade = False
             for _gap, c1, c2, good, cost_per_unit in candidates:
-                # Re-read prices — earlier trades in this pass may have
-                # moved them.
+                p1_row, s1_row, d1_row, s1_keys, d1_keys = state_by_city[c1.cell]
+                p2_row, s2_row, d2_row, s2_keys, d2_keys = state_by_city[c2.cell]
                 s1 = c1.supply.get(good, 0.0) + c1.net_imports.get(good, 0.0)
                 d1 = c1.demand.get(good, 0.0)
                 s2 = c2.supply.get(good, 0.0) + c2.net_imports.get(good, 0.0)
                 d2 = c2.demand.get(good, 0.0)
-                p1 = _get_price(good, s1, d1)
-                p2 = _get_price(good, s2, d2)
+                p1 = p1_row.get(good, _get_price(good, s1, d1))
+                p2 = p2_row.get(good, _get_price(good, s2, d2))
 
                 if p1 > p2 + cost_per_unit:
                     buyer, seller = c1, c2
@@ -310,9 +351,9 @@ def _tick_trade(
                 if hard_cap <= 0.05:
                     continue
 
-                # Bisection on volume — drive post-trade gap down to cost.
+                # Short bisection — good enough for a flow model and much cheaper.
                 lo, hi = 0.0, hard_cap
-                for _ in range(14):
+                for _ in range(6):
                     mid = (lo + hi) * 0.5
                     new_pb = _get_price(good, b_supply + mid, b_demand)
                     new_ps = _get_price(good, s_supply - mid, s_demand)
@@ -342,6 +383,35 @@ def _tick_trade(
 
                 buyer.net_imports[good]  = buyer.net_imports.get(good, 0.0)  + volume
                 seller.net_imports[good] = seller.net_imports.get(good, 0.0) - volume
+
+                # Update cached state for this good so later trades in the pass
+                # use the current effective balances without recomputing all goods.
+                b_price_row, b_surplus_row, b_deficit_row, b_surplus_keys, b_deficit_keys = state_by_city[buyer.cell]
+                s_price_row, s_surplus_row, s_deficit_row, s_surplus_keys, s_deficit_keys = state_by_city[seller.cell]
+                buyer_supply_eff = buyer.supply.get(good, 0.0) + buyer.net_imports.get(good, 0.0)
+                seller_supply_eff = seller.supply.get(good, 0.0) + seller.net_imports.get(good, 0.0)
+                b_price_row[good] = _get_price(good, buyer_supply_eff, b_demand)
+                s_price_row[good] = _get_price(good, seller_supply_eff, s_demand)
+                if buyer_supply_eff > b_demand + 0.05:
+                    b_surplus_row[good] = buyer_supply_eff - b_demand
+                    b_deficit_row.pop(good, None)
+                    b_surplus_keys.add(good)
+                    b_deficit_keys.discard(good)
+                elif b_demand > buyer_supply_eff + 0.05:
+                    b_deficit_row[good] = b_demand - buyer_supply_eff
+                    b_surplus_row.pop(good, None)
+                    b_deficit_keys.add(good)
+                    b_surplus_keys.discard(good)
+                if seller_supply_eff > s_demand + 0.05:
+                    s_surplus_row[good] = seller_supply_eff - s_demand
+                    s_deficit_row.pop(good, None)
+                    s_surplus_keys.add(good)
+                    s_deficit_keys.discard(good)
+                elif s_demand > seller_supply_eff + 0.05:
+                    s_deficit_row[good] = s_demand - seller_supply_eff
+                    s_surplus_row.pop(good, None)
+                    s_deficit_keys.add(good)
+                    s_surplus_keys.discard(good)
 
                 if record_trades:
                     buyer.last_trades.setdefault(good, []).append(
@@ -496,13 +566,15 @@ def tick_sim(
 
     alive = [c for c in civs if c.alive]
 
+
     # ── Diplomacy ─────────────────────────────────────────────────────────
     # Cache border cells per civ once — the pair loop is O(C²).
     border_cache: dict = {c.id: border_cells(c.territory) for c in alive}
     civs_by_id: dict = {c.id: c for c in alive}
 
     # Drift relations + refresh power snapshots.
-    diplomacy.tick_relations(alive, wars, border_cache)
+    diplomacy.tick_relations(alive, wars, border_cache, tick)
+    diplomacy.tick_dispositions(alive, border_cache, wars, tick)
 
     for i in range(len(alive)):
         for j in range(i + 1, len(alive)):
@@ -560,34 +632,49 @@ def tick_sim(
     # ── Per-civ tick ───────────────────────────────────────────────────────
     for civ in alive:
         civ.age += 1
+        layout_dirty = False
 
         # ── Voronoi: assign each territory cell to nearest city ──────────
-        city_cells_map: dict = {}
-        for city in civ.cities:
-            # Seed each city with its own cell to ensure it always has at least one tile
-            city_cells_map[city.cell] = [city.cell]
+        layout_version = getattr(civ, "_layout_version", 0)
+        cache_version = getattr(civ, "_city_cells_cache_version", -1)
+        city_cells_map = getattr(civ, "_city_cells_cache", None)
+        if cache_version != layout_version or city_cells_map is None:
+            city_cells_map = {}
+            for city in civ.cities:
+                # Seed each city with its own cell to ensure it always has at least one tile
+                city_cells_map[city.cell] = [city.cell]
 
-        if civ.cities:
-            for cell in civ.territory:
-                # Skip cells that are already seeds
-                if cell in city_cells_map:
-                    continue
-                    
-                best_city = None
-                best_d = float("inf")
-                for city in civ.cities:
-                    d = dist(cell, city.cell)
-                    if d < best_d:
-                        best_d = d
-                        best_city = city.cell
-                if best_city is not None:
-                    city_cells_map[best_city].append(cell)
+            if civ.cities:
+                for cell in civ.territory:
+                    # Skip cells that are already seeds
+                    if cell in city_cells_map:
+                        continue
+
+                    best_city = None
+                    best_d = float("inf")
+                    for city in civ.cities:
+                        d = dist(cell, city.cell)
+                        if d < best_d:
+                            best_d = d
+                            best_city = city.cell
+                    if best_city is not None:
+                        city_cells_map[best_city].append(cell)
+
+            civ._city_cells_cache = city_cells_map
+            civ._city_cells_cache_version = layout_version
 
         # ── 1. Production & Local Markets ────────────────────────────────────
         # Regional efficiency shorthands — default to 1.0 (no modulation) if
         # the caller didn't pass a map (e.g. legacy tests).
         def _eff(field, cell):
             return field[cell] if field is not None else 1.0
+
+        gov = sync_fort_funding(civ, impr)
+        fort_hosts: dict[int, City] = {}
+        for fort_cell in gov.forts.keys():
+            host_city = fort_host_city(civ, fort_cell)
+            if host_city is not None:
+                fort_hosts[fort_cell] = host_city
 
         for city in civ.cities:
             # Initialize economic dicts
@@ -612,15 +699,34 @@ def tick_sim(
             city.tiles = assigned
             city.farm_tiles = []
 
-            # Cache this city's average efficiency per good — used by
-            # city_dev for profitability and by the UI tooltip.
-            if good_efficiency:
-                from .regions import city_avg_efficiency
-                city.local_efficiency = city_avg_efficiency(assigned, good_efficiency)
-            else:
-                city.local_efficiency = {g: 1.0 for g in GOODS}
+            # Cache this city's average efficiency per good. This only needs
+            # refreshing when the city layout changes because terrain and
+            # regional efficiency are otherwise static.
+            layout_version = getattr(civ, "_layout_version", 0)
+            if (
+                not getattr(city, "local_efficiency", None)
+                or getattr(city, "_local_efficiency_layout_version", -1) != layout_version
+            ):
+                if good_efficiency:
+                    from .regions import city_avg_efficiency
+                    city.local_efficiency = city_avg_efficiency(assigned, good_efficiency)
+                else:
+                    city.local_efficiency = {g: 1.0 for g in GOODS}
+                city._local_efficiency_layout_version = layout_version
 
-            employment.update_city_employment(city, impr)
+            prod_version = getattr(city, "_production_version", 0)
+            if (
+                getattr(city, "_production_cells_cache_layout_version", -1) != layout_version
+                or getattr(city, "_production_cells_cache_version", -1) != prod_version
+            ):
+                city._production_cells_cache = [
+                    cell for cell in assigned if imp_level(impr[cell]) > 0
+                ]
+                city._production_cells_cache_layout_version = layout_version
+                city._production_cells_cache_version = prod_version
+
+            if tick % EMPLOYMENT_PERIOD == 0:
+                employment.update_city_employment(city, impr)
 
             # Periodic profit-based reallocation: every 10 ticks move workers
             # from low-profit buildings to high-profit ones. Uses last tick's
@@ -631,7 +737,7 @@ def tick_sim(
                 )
 
             # Production (Supply)
-            for cell in assigned:
+            for cell in city._production_cells_cache:
                 raw = impr[cell]
                 it = imp_type(raw)
                 lvl = staffed_level(city, cell, imp_level(raw))
@@ -696,12 +802,18 @@ def tick_sim(
             for good, coef in CITY_BASE_DEMAND_PER_POP.items():
                 city.demand[good] += city.population * coef
             _apply_substitute_demands(city)
-            fort_count = sum(1 for t in assigned if imp_type(impr[t]) == IMP.FORT)
-            city.demand["copper"] += fort_count * FORT_METAL_DEMAND_PER_TILE
+
+            # Government upkeep demand must be applied after local demand has
+            # been initialized for the tick; otherwise it gets reset away.
+            for fort_cell, host_city in fort_hosts.items():
+                if host_city is city:
+                    for good, qty in gov.fort_upkeep_goods.items():
+                        city.demand[good] = city.demand.get(good, 0.0) + float(qty)
 
             if not hasattr(city, "building_profit") or city.building_profit is None:
                 city.building_profit = {}
-            city.building_profit.clear()
+            if tick % BUILDING_PROFIT_PERIOD == 0:
+                city.building_profit.clear()
 
             # Base flow state for the intra-tick coupled building/trade solver.
             city._base_supply = {g: city.supply.get(g, 0.0) for g in GOODS}
@@ -723,14 +835,14 @@ def tick_sim(
             if staff_cap > 0:
                 util_state[(city.cell, bkey)] = float(staff_cap)
 
-    if len(all_cities) >= 140:
+    if len(all_cities) >= 100:
         COUPLED_ITERS = 2
     elif len(all_cities) >= 70:
         COUPLED_ITERS = 3
     else:
         COUPLED_ITERS = 4
     UTIL_DAMP = 0.4
-    provisional_trade_passes = 1 if len(all_cities) >= 140 else 2
+    provisional_trade_passes = 1 if len(all_cities) >= 100 else 2
     provisional_trade_stats: dict[str, int] = {}
 
     for _it in range(COUPLED_ITERS):
@@ -830,7 +942,18 @@ def tick_sim(
     # ── 2. Arbitrage (Trade) ──────────────────────────────────────────────────
     # Runs every tick so trade flows are persistent in the UI. Volume per
     # pair self-regulates to the marginal-profit-zero point (see _tick_trade).
-    final_trade_passes = 2 if len(all_cities) >= 140 else (3 if len(all_cities) >= 80 else 4)
+    final_trade_passes = 1 if len(all_cities) >= 140 else (2 if len(all_cities) >= 100 else (3 if len(all_cities) >= 80 else 4))
+
+    staple_pressure = any(
+        (city.supply.get("grain", 0.0) + city.supply.get("bread", 0.0))
+        < (city.demand.get("grain", 0.0) + city.demand.get("bread", 1.0))
+        for city in all_cities
+    )
+    if staple_pressure:
+        # Import-only cities need a few more passes for grain/bread to route
+        # through hubs. Keep the optimization for everything else.
+        final_trade_passes = max(final_trade_passes, 4)
+
     final_trade_stats: dict[str, int] = {}
     _tick_trade(
         alive,
@@ -866,15 +989,22 @@ def tick_sim(
             pop = max(1.0, city.population)
             city.income_per_person = city.income_total / pop
 
-            city.workforce     = int(pop // 20)   # N_EMPLOYEES_PER_LEVEL = 20
-            city.employed_pop  = city.employee_level_count * 20
-            city.unemployed_pop = max(0, city.workforce * 20 - city.employed_pop)
+            city.workforce     = int(pop)
+            city.employed_pop  = city.employee_level_count * N_EMPLOYEES_PER_LEVEL
+            city.unemployed_pop = max(0, city.workforce - city.employed_pop)
 
             # Cleanup temporary solver state.
             if hasattr(city, "_base_supply"):
                 del city._base_supply
             if hasattr(city, "_base_demand"):
                 del city._base_demand
+
+        collect_tax(civ)
+        update_fort_funding(civ)
+
+        if tick % GOV_CONSTRUCTION_PERIOD == 0:
+            refresh_government_construction_queue(civ, civs_by_id, border_cache, impr)
+            execute_government_construction(civ, civs_by_id, ter, impr, om)
 
     _mark("price_income")
 
@@ -892,7 +1022,7 @@ def tick_sim(
                 # STARVATION: Direct loss based on deficit
                 # 1 unit deficit = ~12.5 people
                 shrinkage = abs(net_staple_flow) * 15.0
-                city.population = max(40.0, city.population - shrinkage)
+                city.population = max(80.0, city.population - shrinkage)
             else:
                 # GROWTH: Based on physical surplus
                 # Growth proportional to the surplus magnitude relative to demand
@@ -933,13 +1063,13 @@ def tick_sim(
                 best_vac = employment.best_vacancy_profit(
                     city, impr, ter, res, rivers, good_efficiency,
                 )
-                opp_per_person = best_vac / 20.0  # N_EMPLOYEES_PER_LEVEL
+                opp_per_person = best_vac / N_EMPLOYEES_PER_LEVEL
 
                 pop         = max(1.0, city.population)
                 unemp_rate  = city.unemployed_pop / pop
                 static_pen  = 0.05 if city.unemployed_pop >= 20 else 0.0
                 scale_pen   = unemp_rate * 3.0
-                income_bon  = avg_income    * 4.0
+                income_bon  = avg_income    * 5.0
                 opp_bon     = opp_per_person * 1.5
 
                 city.attractiveness = max(
@@ -971,15 +1101,17 @@ def tick_sim(
                 total_pool += out
 
             # 3. Redistribute pool across cities proportional to attractiveness.
+            # Store this as a per-tick flow so the effect persists across the
+            # whole cadence window instead of spiking for a single frame.
             for i, city in enumerate(cities):
                 share = total_pool * (city.attractiveness / total_attr)
                 net   = share - emigrants[i]
-                city.net_migration = net
-                city.population   += net
-    else:
-        for civ in alive:
-            for city in civ.cities:
-                city.net_migration = 0.0
+                city.net_migration = net / MIGRATION_PERIOD
+
+    for civ in alive:
+        for city in civ.cities:
+            if city.net_migration != 0.0:
+                city.population = max(80.0, city.population + city.net_migration)
 
     _mark("migration")
 
@@ -1069,6 +1201,7 @@ def tick_sim(
                             new_city.max_hp = combat.city_max_hp(new_city, impr)
                             new_city.hp = new_city.max_hp
                             civ.cities.append(new_city)
+                            layout_dirty = True
 
                             paying_city.gold -= 20
 
@@ -1092,45 +1225,55 @@ def tick_sim(
             build_road(civ, ter)
 
         # ── Expansion ────────────────────────────────────────────────────
-        borders = border_cells(civ.territory)
-        
-        # 1. Immediate "pocket" filling (free)
-        pocket_targets = [
-            c for c in borders
-            if 0 <= c < N and is_land(ter, c) and om[c] == 0
-            and sum(1 for n in neighbors(c) if n in civ.territory) >= 3
-        ]
-        for c in pocket_targets:
-            civ.territory.add(c)
-            om[c] = civ.id
-            _eval_settle_candidate(civ, c, ter, rivers, res, all_city_cells, params)
+        city_count = max(1, len(civ.cities))
+        tiles_per_city = len(civ.territory) / city_count
+        can_expand_territory = tiles_per_city <= MAX_TILES_PER_CITY_FOR_EXPANSION
 
-        # 2. Passive territorial creep (unconditional)
-        # Cities always want more land. 
-        if random.random() < 0.2: # Steady growth chance
+        if can_expand_territory:
             borders = border_cells(civ.territory)
-            targets = [
+
+            # 1. Immediate "pocket" filling (free)
+            pocket_targets = [
                 c for c in borders
                 if 0 <= c < N and is_land(ter, c) and om[c] == 0
+                and sum(1 for n in neighbors(c) if n in civ.territory) >= 3
             ]
-            if targets:
-                targets.sort(key=lambda c: (
-                    sum(1 for n in neighbors(c) if n in civ.territory) * 5
-                    + (4 if c in res else 0)
-                    + (params["river_pref"] * 0.5 if cell_on_river(c, rivers) else 0)
-                    + (2 if ter[c] in (T.PLAINS, T.GRASS) else 0)
-                    - (3 if ter[c] >= T.MTN else 0)
-                    + random.random() * 3.0
-                ), reverse=True)
-                
-                # Take 1-3 cells every few ticks
-                cnt = random.randint(1, 3)
-                for c in targets[:cnt]:
-                    civ.territory.add(c)
-                    om[c] = civ.id
-                    _eval_settle_candidate(civ, c, ter, rivers, res, all_city_cells, params)
+            for c in pocket_targets:
+                civ.territory.add(c)
+                om[c] = civ.id
+                _eval_settle_candidate(civ, c, ter, rivers, res, all_city_cells, params)
+                layout_dirty = True
 
+            # 2. Passive territorial creep (unconditional)
+            # Cities always want more land.
+            if random.random() < 0.2:  # Steady growth chance
+                borders = border_cells(civ.territory)
+                targets = [
+                    c for c in borders
+                    if 0 <= c < N and is_land(ter, c) and om[c] == 0
+                ]
+                if targets:
+                    targets.sort(key=lambda c: (
+                        sum(1 for n in neighbors(c) if n in civ.territory) * 5
+                        + (4 if c in res else 0)
+                        + (params["river_pref"] * 0.5 if cell_on_river(c, rivers) else 0)
+                        + (2 if ter[c] in (T.PLAINS, T.GRASS) else 0)
+                        - (3 if ter[c] >= T.MTN else 0)
+                        + random.random() * 3.0
+                    ), reverse=True)
+
+                    # Take 1-3 cells every few ticks
+                    cnt = random.randint(1, 3)
+                    for c in targets[:cnt]:
+                        civ.territory.add(c)
+                        om[c] = civ.id
+                        _eval_settle_candidate(civ, c, ter, rivers, res, all_city_cells, params)
+                        layout_dirty = True
+
+        before_cities = len(civ.cities)
         civ.cities = [c for c in civ.cities if c.cell in civ.territory]
+        if len(civ.cities) != before_cities:
+            layout_dirty = True
         if civ.cities and not any(c.is_capital for c in civ.cities):
             civ.cities[0].is_capital = True
             civ.capital = civ.cities[0].cell
@@ -1146,6 +1289,7 @@ def tick_sim(
                         for c in list(civ.territory):
                             conqueror.territory.add(c)
                             om[c] = conqueror_id
+                        _touch_city_layout(conqueror)
                         civ.alive = False
                         diplomacy.break_alliances_with(civ, civs_by_id)
                         add_event(f"🏳 Year {tick}: {civ.name} surrendered to {conqueror.name}!")
@@ -1175,7 +1319,10 @@ def tick_sim(
             refounded.hp     = refounded.max_hp
             civ.cities  = [refounded]
             civ.capital = cap_cell
+            layout_dirty = True
             add_event(f"🏛 Year {tick}: {civ.name} refounded {cn}")
+        if layout_dirty:
+            _touch_city_layout(civ)
 
     _mark("post_econ_citydev")
 

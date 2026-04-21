@@ -317,16 +317,13 @@ def reallocate_workers_by_profit(
 ) -> None:
     """Market-impact-aware reallocation among producer improvements/buildings.
 
-    The old full-reset allocator could oscillate (e.g. factory 4 -> 0 -> 4)
-    because it ignored that moving many workers at once changes local market
-    conditions. This version uses:
-
-      1) diminishing marginal value per additional staffed level (proxy for
-         own market impact), and
-      2) hysteresis + limited shift rate per tick (prevents ping-pong).
+    Rebalancing is intentionally one-step per reshuffle: at most one worker
+    is fired from the weakest slot, and at most one worker is moved into a
+    clearly better slot. This keeps staffing changes gradual and avoids the
+    0 -> 2 -> 0 style swings that came from full reset reallocations.
 
     Non-producer staffables (windmill/pasture/port) keep their staffing and
-    count against the worker budget.
+    are left alone here.
     """
     if not hasattr(city, "staffing") or city.staffing is None:
         city.staffing = {}
@@ -337,7 +334,6 @@ def reallocate_workers_by_profit(
 
     # Entries: (base_profit_per_level, kind, key, capacity_levels)
     producer_entries: list[tuple[float, str, object, int]] = []
-    fixed_workers = 0
     for cell in city.tiles:
         if not (0 <= cell < N):
             continue
@@ -353,8 +349,6 @@ def reallocate_workers_by_profit(
         if it in DIRECT_PRODUCER_TYPES:
             ppl = _profit_per_level(cell, raw, city, ter, res, rivers, good_efficiency)
             producer_entries.append((ppl, "imp", cell, bldg_lvl))
-        else:
-            fixed_workers += staffing.get(cell, 0)
 
     # City buildings compete for the same workforce budget.
     blevels = getattr(city, "buildings", None) or {}
@@ -363,8 +357,6 @@ def reallocate_workers_by_profit(
             continue
         ppl = _building_profit_per_level(city, bkey)
         producer_entries.append((ppl, "bld", bkey, int(lvl)))
-
-    budget = max(0, int(city.employee_level_count) - fixed_workers)
 
     # Build slot table keyed by (kind, key).
     slots: dict[tuple[str, object], dict] = {}
@@ -384,7 +376,6 @@ def reallocate_workers_by_profit(
     # Market-impact proxy and anti-oscillation knobs.
     MARKET_IMPACT_BETA = 0.35
     SWITCH_MARGIN = 0.15
-    MAX_LEVEL_SHIFTS_PER_TICK = 2
 
     def _marginal_value(slot: dict, current_alloc: int) -> float:
         """Value of adding one more staffed level at current_alloc.
@@ -396,71 +387,38 @@ def reallocate_workers_by_profit(
             return base
         return base / (1.0 + MARKET_IMPACT_BETA * max(0, current_alloc))
 
-    # First, normalize to budget by trimming worst marginal units.
-    def _total_alloc() -> int:
-        return sum(s["alloc"] for s in slots.values())
+    donor_id = None
+    donor_val = float("inf")
+    recv_id = None
+    recv_val = 0.0
 
-    while _total_alloc() > budget:
-        donor_id = None
-        donor_val = float("inf")
-        for sid, s in slots.items():
-            if s["alloc"] <= 0:
-                continue
-            # Value of the last staffed unit on this slot.
+    for sid, s in slots.items():
+        if s["alloc"] > 0:
             val = _marginal_value(s, s["alloc"] - 1)
             if val < donor_val:
                 donor_val = val
                 donor_id = sid
-        if donor_id is None:
-            break
-        slots[donor_id]["alloc"] -= 1
-
-    # If we have spare budget, add to best positive marginal slots.
-    while _total_alloc() < budget:
-        recv_id = None
-        recv_val = 0.0
-        for sid, s in slots.items():
-            if s["alloc"] >= s["cap"]:
-                continue
+        if s["alloc"] < s["cap"]:
             val = _marginal_value(s, s["alloc"])
             if val > recv_val:
                 recv_val = val
                 recv_id = sid
-        if recv_id is None or recv_val <= 0:
-            break
-        slots[recv_id]["alloc"] += 1
 
-    # Controlled rebalancing: only move a few levels/tick and only if
-    # the gain clears a margin, preventing back-and-forth flicker.
-    for _ in range(MAX_LEVEL_SHIFTS_PER_TICK):
-        donor_id = None
-        donor_val = float("inf")
-        recv_id = None
-        recv_val = 0.0
+    if donor_id is not None:
+        fire_one = donor_val <= 0.0
+        move_one = (
+            recv_id is not None
+            and recv_id != donor_id
+            and recv_val > donor_val * (1.0 + SWITCH_MARGIN)
+        )
 
-        for sid, s in slots.items():
-            if s["alloc"] > 0:
-                val = _marginal_value(s, s["alloc"] - 1)
-                if val < donor_val:
-                    donor_val = val
-                    donor_id = sid
-            if s["alloc"] < s["cap"]:
-                val = _marginal_value(s, s["alloc"])
-                if val > recv_val:
-                    recv_val = val
-                    recv_id = sid
-
-        if donor_id is None or recv_id is None:
-            break
-        if recv_id == donor_id:
-            break
-        if recv_val <= 0:
-            break
-        if recv_val <= donor_val * (1.0 + SWITCH_MARGIN):
-            break
-
-        slots[donor_id]["alloc"] -= 1
-        slots[recv_id]["alloc"] += 1
+        if fire_one:
+            slots[donor_id]["alloc"] -= 1
+            if move_one:
+                slots[recv_id]["alloc"] += 1
+        elif move_one:
+            slots[donor_id]["alloc"] -= 1
+            slots[recv_id]["alloc"] += 1
 
     # Rewrite only producer slots; keep non-producer staffing untouched.
     for _, kind, key, _ in producer_entries:

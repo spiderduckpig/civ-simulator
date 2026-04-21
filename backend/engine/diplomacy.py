@@ -51,6 +51,15 @@ CONF_ENEMY_BROKEN    = 0.08
 MORALE_PEACE_THRESHOLD = -0.18
 
 
+# ── Long-horizon disposition (HMM-like) ─────────────────────────────
+DISPOSITION_STATES = ("calm", "aggressive", "fortifying")
+DISPOSITION_PERIOD_TICKS = 500
+DISPOSITION_STAY_PROB = 0.94
+AGGRESSIVE_PRESSURE_PERIOD = 100
+AGGRESSIVE_RELATION_HIT = -0.24
+AGGRESSIVE_TARGET_LIMIT = 2
+
+
 # ── Setup / ticking ──────────────────────────────────────────────────
 
 def ensure_civ_diplo(civ: Civ, all_civs: List[Civ]) -> None:
@@ -91,7 +100,104 @@ def _symmetric_shift(a: Civ, b: Civ, delta: float) -> None:
     b.relations[a.id] = _clamp(b.relations.get(a.id, 0.0) + delta)
 
 
-def tick_relations(alive: List[Civ], wars: Dict[str, War], border_cache: Dict[int, Set[int]]) -> None:
+def _weighted_pick(weighted_states: List[tuple[str, float]]) -> str:
+    total = sum(w for _, w in weighted_states)
+    if total <= 0.0:
+        return "calm"
+    roll = random.random() * total
+    acc = 0.0
+    for state, weight in weighted_states:
+        acc += weight
+        if roll <= acc:
+            return state
+    return weighted_states[-1][0]
+
+
+def _choose_aggressive_targets(civ: Civ, alive: List[Civ], border_cache: Dict[int, Set[int]]) -> List[int]:
+    borders = border_cache.get(civ.id, set())
+    if not borders:
+        return []
+
+    neighbor_candidates: list[tuple[float, int]] = []
+    for other in alive:
+        if other.id == civ.id or other.id in civ.allies:
+            continue
+        if not any(cell in other.territory for cell in borders):
+            continue
+        power_ratio = civ.power / max(other.power, 1.0)
+        hostility = 0.5 - civ.relations.get(other.id, 0.0)
+        score = power_ratio * 1.2 + hostility
+        neighbor_candidates.append((score, other.id))
+
+    neighbor_candidates.sort(reverse=True)
+    return [oid for _, oid in neighbor_candidates[:AGGRESSIVE_TARGET_LIMIT]]
+
+
+def tick_dispositions(alive: List[Civ], border_cache: Dict[int, Set[int]], wars: Dict[str, War], tick: int) -> None:
+    """Rare long-horizon policy shifts and aggressive neighbor selection."""
+    for civ in alive:
+        if getattr(civ, "disposition", None) not in DISPOSITION_STATES:
+            civ.disposition = "calm"
+        if not hasattr(civ, "disposition_ticks"):
+            civ.disposition_ticks = 0
+        if not hasattr(civ, "disposition_targets") or civ.disposition_targets is None:
+            civ.disposition_targets = []
+        civ.disposition_ticks += 1
+
+    if tick <= 0 or (tick % DISPOSITION_PERIOD_TICKS) != 0:
+        return
+
+    avg_power = sum(c.power for c in alive) / max(1, len(alive))
+    active_war_ids = {
+        w.att for w in wars.values()
+    } | {
+        w.def_id for w in wars.values()
+    }
+
+    for civ in alive:
+        current = civ.disposition
+        base_shift = (1.0 - DISPOSITION_STAY_PROB) / 2.0
+        probs = {
+            "calm": base_shift,
+            "aggressive": base_shift,
+            "fortifying": base_shift,
+        }
+        probs[current] = DISPOSITION_STAY_PROB
+
+        power_ratio = civ.power / max(avg_power, 1.0)
+        if power_ratio >= 1.25:
+            probs["aggressive"] += 0.10
+            probs["fortifying"] = max(0.0, probs["fortifying"] - 0.05)
+        elif power_ratio <= 0.80:
+            probs["fortifying"] += 0.12
+            probs["aggressive"] = max(0.0, probs["aggressive"] - 0.07)
+        else:
+            probs["calm"] += 0.04
+
+        if civ.id in active_war_ids:
+            probs["aggressive"] += 0.04
+
+        if len(civ.cities) <= 2:
+            probs["fortifying"] += 0.03
+
+        next_state = _weighted_pick(list(probs.items()))
+        if next_state != current:
+            civ.disposition = next_state
+            civ.disposition_ticks = 0
+            civ.events.append(f"Year {civ.age}: Adopted {next_state} disposition")
+
+        if civ.disposition == "aggressive":
+            civ.disposition_targets = _choose_aggressive_targets(civ, alive, border_cache)
+        elif civ.disposition == "fortifying":
+            civ.disposition_targets = []
+
+
+def tick_relations(
+    alive: List[Civ],
+    wars: Dict[str, War],
+    border_cache: Dict[int, Set[int]],
+    tick: int,
+) -> None:
     """Drift relations every tick based on borders and war state, and
     refresh each civ's cached power snapshot."""
     for civ in alive:
@@ -112,6 +218,28 @@ def tick_relations(alive: List[Civ], wars: Dict[str, War], border_cache: Dict[in
                 _symmetric_shift(a, b, REL_DRIFT_PEACE_NEIGHBOR)
             else:
                 _symmetric_shift(a, b, REL_DRIFT_PEACE_DISTANT)
+
+    # Aggressive civs periodically poison relations with chosen border rivals.
+    for civ in alive:
+        if getattr(civ, "disposition", "calm") != "aggressive":
+            continue
+        if not getattr(civ, "disposition_targets", None):
+            civ.disposition_targets = _choose_aggressive_targets(civ, alive, border_cache)
+
+    # Keep this shock cadence sparse so policy remains long-horizon.
+    if tick % AGGRESSIVE_PRESSURE_PERIOD == 0:
+        civs_by_id = {c.id: c for c in alive}
+        for civ in alive:
+            if getattr(civ, "disposition", "calm") != "aggressive":
+                continue
+            targets = list(getattr(civ, "disposition_targets", []))
+            if not targets:
+                continue
+            for tid in targets:
+                target = civs_by_id.get(tid)
+                if not target or not target.alive or tid in civ.allies:
+                    continue
+                _symmetric_shift(civ, target, AGGRESSIVE_RELATION_HIT)
 
 
 # ── War declaration ──────────────────────────────────────────────────
@@ -137,6 +265,15 @@ def consider_war_declaration(
     rel = a.relations.get(b.id, 0.0)
     # Aggressiveness lets a civ shrug off worse relations before refusing war.
     hostility = (REL_WAR_TOLERANCE - rel) * a.aggressiveness
+    disposition = getattr(a, "disposition", "calm")
+    if disposition == "aggressive":
+        hostility *= 1.45
+        if b.id in getattr(a, "disposition_targets", []):
+            hostility *= 1.30
+    elif disposition == "fortifying":
+        hostility *= 0.55
+    else:
+        hostility *= 0.90
     if hostility <= 0:
         return None
 
@@ -146,11 +283,16 @@ def consider_war_declaration(
     ratio  = a_bloc / max(b_bloc, 1.0)
     # Already-at-war civs need a much bigger power edge to open a second front.
     min_ratio = 0.85 + (0.35 if existing_wars >= 1 else 0.0)
+    if disposition == "aggressive":
+        min_ratio -= 0.08
+    elif disposition == "fortifying":
+        min_ratio += 0.12
     if ratio < min_ratio:
         return None
 
     ratio_bonus = min(1.5, (ratio - 0.85) * 1.4)
-    chance = hostility * 0.014 * (0.7 + ratio_bonus)
+    weak_target_bonus = 1.0 + min(0.7, max(0.0, ratio - 1.0) * 0.6)
+    chance = hostility * 0.014 * (0.7 + ratio_bonus) * weak_target_bonus
     # Being already at war makes a civ an order of magnitude less likely to
     # declare another — multi-front wars are a rare, costly choice.
     if existing_wars >= 1:

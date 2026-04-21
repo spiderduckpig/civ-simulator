@@ -45,6 +45,7 @@ from .constants import (
     CITY_BASE_HP, CAPITAL_HP_BONUS, FORT_HP_BONUS,
 )
 from .helpers import neighbors, dist, land_astar_path
+from .government import fort_is_active
 from .improvements import imp_type, imp_level
 from .civ import gen_commander_name, next_army_id
 from . import diplomacy
@@ -123,7 +124,7 @@ def spawn_war_armies(civ: Civ, war: War, side: str, impr: list, war_id: str) -> 
     forts: list = []
     for cell in civ.territory:
         raw = impr[cell] if 0 <= cell < N else 0
-        if imp_type(raw) == IMP.FORT:
+        if imp_type(raw) == IMP.FORT and fort_is_active(civ, cell):
             forts.append((cell, imp_level(raw)))
 
     armies: list = []
@@ -165,7 +166,7 @@ def _compute_fortification(army: Army, civ: Civ, impr: list) -> tuple[float, str
         labels.append("home soil")
 
     raw = impr[cur]
-    if imp_type(raw) == IMP.FORT and cur in own_territory:
+    if imp_type(raw) == IMP.FORT and cur in own_territory and fort_is_active(civ, cur):
         lvl = imp_level(raw)
         bonus += FORT_BONUS_PER_LEVEL * lvl
         labels.append(f"fort Lv.{lvl}")
@@ -693,10 +694,21 @@ def _resolve_city_assault(
                 continue
 
             # ── Capture ─────────────────────────────────────────────────
+            # Transfer the full city hinterland immediately.
+            city_tiles = set(getattr(city, "tiles", None) or [])
+            captured_cells = {
+                cell for cell in city_tiles
+                if 0 <= cell < N and cell in defender.territory
+            }
+            captured_cells.add(city.cell)
+
+            for cell in captured_cells:
+                defender.territory.discard(cell)
+                attacker.territory.add(cell)
+                if 0 <= cell < len(om):
+                    om[cell] = attacker.id
+
             defender.cities = [c for c in getattr(defender, "cities", []) if c.cell != city.cell]
-            defender.territory.discard(city.cell)
-            attacker.territory.add(city.cell)
-            om[city.cell] = attacker.id
             city.is_capital = False
             city.max_hp = city_max_hp(city, impr)
             city.hp = city.max_hp
@@ -706,13 +718,9 @@ def _resolve_city_assault(
                 attacker.cities = []
             attacker.cities.append(city)
 
-            # Transfer the immediate ring of enemy tiles around the city to
-            # the attacker as a defensive buffer so the capture "sticks".
-            for n in neighbors(city.cell):
-                if 0 <= n < N and n in defender.territory:
-                    defender.territory.discard(n)
-                    attacker.territory.add(n)
-                    om[n] = attacker.id
+            # Force territory/cell-cache refresh next simulation pass.
+            defender._layout_version = getattr(defender, "_layout_version", 0) + 1
+            attacker._layout_version = getattr(attacker, "_layout_version", 0) + 1
 
             add_event(f"🔥 Year {tick}: {attacker.name} stormed {city.name}!")
 
@@ -860,7 +868,7 @@ def tick_armies(
 
             for cell in list(getattr(civ, "territory", set())):
                 raw = impr[cell] if 0 <= cell < N else 0
-                if imp_type(raw) != IMP.FORT:
+                if imp_type(raw) != IMP.FORT or not fort_is_active(civ, cell):
                     continue
                 if cell in occupied_origins:
                     continue
