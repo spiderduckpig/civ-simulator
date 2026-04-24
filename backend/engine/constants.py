@@ -62,7 +62,7 @@ TERRAIN_NAMES = {
 RESOURCE_ICONS = {
     "iron": "⛏", "gold": "✦", "horses": "🐎", "wheat": "🌾",
     "fish": "🐟", "gems": "💎", "wood": "🪵", "stone": "🪨", "fabric": "🧵",
-    "spices": "🌶", "ivory": "🦷",
+    "spices": "🌶", "ivory": "🦷", "sapphires": "🔷",
 }
 
 
@@ -165,9 +165,29 @@ FOCUS_COLORS = {
 }
 
 CAN_FARM = {T.PLAINS, T.GRASS, T.JUNGLE, T.SWAMP}
-RES_LIST = ["iron", "gold", "horses", "wheat", "fish", "gems", "wood", "stone", "spices", "ivory"]
+RES_LIST = ["iron", "gold", "horses", "wheat", "fish", "gems", "wood", "stone", "spices", "ivory", "sapphires"]
 
 CIV_PALETTE = ["#e74c3c","#3498db","#f39c12","#2ecc71","#9b59b6","#e67e22","#1abc9c","#c0392b","#2980b9","#27ae60","#8e44ad","#d35400","#16a085","#f1c40f","#e84393","#00b894","#6c5ce7","#fd79a8","#00cec9","#d63031","#0984e3","#00b4d8","#a29bfe","#636e72","#b2bec3"]
+
+# ── Professions ─────────────────────────────────────────────────────────────
+# Each staffable improvement / building carries a ``professions`` dict whose
+# values sum to N_EMPLOYEES_PER_LEVEL. The simulation doesn't key behaviour
+# off profession names — they're descriptive bookkeeping for the city-panel
+# breakdown. Add a key here, then reference it from registry.py / buildings.py.
+PROFESSION_META: dict[str, dict] = {
+    "farmer":     {"label": "Farmer",     "icon": "🌾", "color": "#c8a000"},
+    "rancher":    {"label": "Rancher",    "icon": "🐄", "color": "#77bb55"},
+    "fisherman":  {"label": "Fisher",     "icon": "🐟", "color": "#4aaed8"},
+    "lumberjack": {"label": "Lumberjack", "icon": "🪵", "color": "#6b4423"},
+    "miner":      {"label": "Miner",      "icon": "⛏",  "color": "#8a8a8a"},
+    "smith":      {"label": "Smith",      "icon": "🔨", "color": "#b84422"},
+    "miller":     {"label": "Miller",     "icon": "🌬", "color": "#e8d088"},
+    "sailor":     {"label": "Sailor",     "icon": "⚓", "color": "#336699"},
+    "worker":     {"label": "Worker",     "icon": "🏭", "color": "#5a9e3a"},
+    "artisan":    {"label": "Artisan",    "icon": "🎨", "color": "#9b59b6"},
+    "owner":      {"label": "Owner",      "icon": "💼", "color": "#e8a44b"},
+    "aristocrat": {"label": "Aristocrat", "icon": "👑", "color": "#d299ff"},
+}
 
 MIN_CITY_DIST = 9
 
@@ -227,13 +247,17 @@ GOOD_SPECS: dict[str, GoodSpec] = {
     "bread": GoodSpec("bread", "Bread", "🍞", 2.2, tradable=True),
     "lumber": GoodSpec("lumber", "Lumber", "🪵", 2.0, tradable=True),
     "copper_ore": GoodSpec("copper_ore", "Copper Ore", "⛏", 3.0, tradable=True),
+    "iron_ore": GoodSpec("iron_ore", "Iron Ore", "⛓", 4.2, tradable=True),
     "stone": GoodSpec("stone", "Stone", "🧱", 6.0, tradable=True),
     "copper": GoodSpec("copper", "Copper", "🔶", 9.0, tradable=True),
+    "iron": GoodSpec("iron", "Iron", "⚙", 11.0, tradable=True),
     "fabric": GoodSpec("fabric", "Fabric", "🧵", 4.0, tradable=True),
     "clothes": GoodSpec("clothes", "Clothes", "👕", 8.0, tradable=True),
     "paper": GoodSpec("paper", "Paper", "📜", 5.0, tradable=True),
-    "housing": GoodSpec("housing", "Housing", "🏠", 10.0, tradable=False),
+    "sapphires": GoodSpec("sapphires", "Sapphires", "🔷", 42.0, tradable=True),
+    "housing": GoodSpec("housing", "Housing", "🏠", 6.0, tradable=False),
     "ships": GoodSpec("ships", "Ships", "⛵", 20.0, tradable=True),
+    "jewelry": GoodSpec("jewelry", "Jewelry", "", 50.0, tradable=True)
 }
 
 GOODS = list(GOOD_SPECS.keys())

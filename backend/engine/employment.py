@@ -22,6 +22,18 @@ from .buildings import BUILDING_TYPES
 from .improvements import imp_type, imp_level
 from .helpers import cell_on_river
 from .mapgen import cell_coastal
+from .registry import IMPROVEMENTS
+from .economy_profiles import (
+    PROFESSION_CONSUMPTION_PROFILES,
+    PROFESSION_WAGE_POOL_SHARE,
+    STIMULUS_UNEMP_FLOOR,
+    STIMULUS_RESERVE_TICKS,
+    STIMULUS_DRAWDOWN_CAP,
+    STIMULUS_INCOME_MULT,
+    CONSUMPTION_INCREASE_MULT,
+    CONSUMPTION_DECREASE_MULT,
+    profession_consumption_cost,
+)
 
 
 # Improvements that take workers. Forts are explicitly excluded — they
@@ -158,6 +170,27 @@ def _cleanup_staffing(city, impr: list) -> None:
             bstaff.pop(bkey, None)
 
 
+def _vacant_producer_levels(city, impr: list) -> dict[int, int]:
+    """Cache how many staffed producer levels are still vacant by type."""
+    staffing = getattr(city, "staffing", None) or {}
+    vacant: dict[int, int] = {}
+    for cell in getattr(city, "tiles", []):
+        if not (0 <= cell < N):
+            continue
+        raw = impr[cell]
+        if not raw:
+            continue
+        it = imp_type(raw)
+        if it not in DIRECT_PRODUCER_TYPES:
+            continue
+        lvl = imp_level(raw)
+        staffed = int(staffing.get(cell, 0))
+        if staffed >= lvl:
+            continue
+        vacant[it] = vacant.get(it, 0) + (lvl - staffed)
+    return vacant
+
+
 def update_city_employment(
     city, impr: list, *, rand: Callable[[], float] = random.random,
 ) -> None:
@@ -196,6 +229,8 @@ def update_city_employment(
             current -= 1
 
     city.employee_level_count = current
+    city.professions = profession_breakdown(city, impr)
+    city.vacant_producer_levels = _vacant_producer_levels(city, impr)
 
 
 def _profit_per_level(
@@ -234,7 +269,12 @@ def _profit_per_level(
         return out * p.get("fabric", BASE_PRICES["fabric"])
     if it == IMP.MINE:
         out = (1.0 if r == "iron" else 0.25) * eff("copper_ore")
-        return out * p.get("copper_ore", BASE_PRICES["copper_ore"])
+        value = out * p.get("copper_ore", BASE_PRICES["copper_ore"])
+        if r == "iron":
+            value += 0.45 * eff("iron_ore") * p.get("iron_ore", BASE_PRICES.get("iron_ore", 4.2))
+        if r == "sapphires":
+            value += 0.22 * eff("sapphires") * p.get("sapphires", BASE_PRICES.get("sapphires", 42.0))
+        return value
     if it == IMP.QUARRY:
         out = 2.0 * eff("stone")
         return out * p.get("stone", BASE_PRICES["stone"])
@@ -265,51 +305,6 @@ def _building_profit_per_level(city, bkey: str) -> float:
         for good, amount in b.inputs.items()
     )
     return out_v - in_v
-
-
-def best_vacancy_profit(
-    city, impr: list, ter: list, res: dict, rivers, good_efficiency,
-) -> float:
-    """Highest profit/level among unstaffed slots in this city.
-
-    Represents the best job a migrant could walk into. Ignores producer
-    cells that are already fully staffed and ignores slots whose
-    profit/level is non-positive (an unprofitable vacancy shouldn't
-    attract anyone). Returns 0.0 if no profitable vacancy exists.
-
-    O(B) with B = staffable producer cells in the city."""
-    staffing = getattr(city, "staffing", None) or {}
-    best = 0.0
-    for cell in city.tiles:
-        if not (0 <= cell < N):
-            continue
-        raw = impr[cell]
-        if not raw:
-            continue
-        it = imp_type(raw)
-        if it not in DIRECT_PRODUCER_TYPES:
-            continue
-        bldg_lvl = imp_level(raw)
-        if bldg_lvl <= 0:
-            continue
-        if staffing.get(cell, 0) >= bldg_lvl:
-            continue
-        ppl = _profit_per_level(cell, raw, city, ter, res, rivers, good_efficiency)
-        if ppl > best:
-            best = ppl
-
-    # Include city-building vacancies in migration pull calculations.
-    if hasattr(city, "buildings") and city.buildings:
-        bstaff = getattr(city, "building_staffing", None) or {}
-        for bkey, lvl in city.buildings.items():
-            if lvl <= 0:
-                continue
-            if bstaff.get(bkey, 0) >= lvl:
-                continue
-            ppl = _building_profit_per_level(city, bkey)
-            if ppl > best:
-                best = ppl
-    return best
 
 
 def reallocate_workers_by_profit(
@@ -436,6 +431,144 @@ def reallocate_workers_by_profit(
             bstaff[key] = s["alloc"]
 
     city.employee_level_count = sum(staffing.values()) + sum(bstaff.values())
+    city.professions = profession_breakdown(city, impr)
+    city.vacant_producer_levels = _vacant_producer_levels(city, impr)
+
+
+def profession_breakdown(city, impr: list) -> dict[str, int]:
+    """Tally profession headcounts across every staffed improvement and
+    building in the city. Pulls the per-level breakdown from the registered
+    ImprovementType / BuildingType metadata — adding a new profession is a
+    data-only change in constants.py + registry.py + buildings.py.
+    """
+    counts: dict[str, int] = {}
+
+    staffing = getattr(city, "staffing", None) or {}
+    for cell, level in staffing.items():
+        if level <= 0 or not (0 <= cell < N):
+            continue
+        raw = impr[cell]
+        if not raw:
+            continue
+        itype = IMPROVEMENTS.get(imp_type(raw))
+        if itype is None:
+            continue
+        for prof, per_level in itype.professions.items():
+            counts[prof] = counts.get(prof, 0) + per_level * int(level)
+
+    bstaff = getattr(city, "building_staffing", None) or {}
+    for bkey, level in bstaff.items():
+        if level <= 0:
+            continue
+        b = BUILDING_TYPES.get(bkey)
+        if b is None:
+            continue
+        for prof, per_level in b.professions.items():
+            counts[prof] = counts.get(prof, 0) + per_level * int(level)
+
+    return counts
+
+
+def update_city_consumption_state(city) -> None:
+    """Update per-profession wages and slow-moving consumption levels.
+
+    This is intentionally cadence-based and cheap: a small number of
+    professions are updated from a rolling income snapshot, then their
+    consumption tiers are nudged up or down based on whether the current
+    basket looks affordable.
+    """
+    if not hasattr(city, "profession_wages") or city.profession_wages is None:
+        city.profession_wages = {}
+    if not hasattr(city, "profession_income_shares") or city.profession_income_shares is None:
+        city.profession_income_shares = {}
+    if not hasattr(city, "consumption_levels") or city.consumption_levels is None:
+        city.consumption_levels = {}
+
+    prof_counts = getattr(city, "professions", None) or {}
+    effective_counts = dict(prof_counts)
+    unemployed_count = int(max(0, getattr(city, "unemployed_pop", 0) or 0))
+    if unemployed_count > 0:
+        effective_counts["unemployed"] = effective_counts.get("unemployed", 0) + unemployed_count
+
+    if not effective_counts:
+        for prof, profile in PROFESSION_CONSUMPTION_PROFILES.items():
+            city.profession_wages[prof] = 0.0
+            city.profession_income_shares[prof] = 0.0
+            city.consumption_levels.setdefault(prof, profile.base_level)
+        return
+
+    pop = max(1.0, float(getattr(city, "population", 0.0)))
+    income_per_person = float(getattr(city, "income_per_person", 0.0))
+    total_income = max(0.0, income_per_person * pop)
+
+    # Slack stimulus: idle labor + idle capital → spend accumulated savings
+    # to supplement this tick's wage pool. Raises consumption tiers via the
+    # hysteresis below, which raises demand, which reopens investment.
+    unemp_rate = unemployed_count / pop
+    gold_reserve = float(getattr(city, "gold", 0.0))
+    reserve_floor = total_income * STIMULUS_RESERVE_TICKS
+    stimulus = 0.0
+    if unemp_rate > STIMULUS_UNEMP_FLOOR and gold_reserve > reserve_floor:
+        slack = unemp_rate - STIMULUS_UNEMP_FLOOR
+        target_draw = total_income * slack * STIMULUS_INCOME_MULT
+        max_draw = (gold_reserve - reserve_floor) * STIMULUS_DRAWDOWN_CAP
+        stimulus = max(0.0, min(target_draw, max_draw))
+        city.gold = gold_reserve - stimulus
+
+    wage_pool = (total_income + stimulus) * PROFESSION_WAGE_POOL_SHARE
+
+    weights: dict[str, float] = {}
+    for prof, count in effective_counts.items():
+        if count <= 0:
+            continue
+        profile = PROFESSION_CONSUMPTION_PROFILES.get(prof)
+        if profile is None:
+            continue
+        weights[prof] = count * profile.income_weight
+
+    total_weight = sum(weights.values())
+    if total_weight <= 0.0:
+        for prof, profile in PROFESSION_CONSUMPTION_PROFILES.items():
+            city.profession_wages[prof] = 0.0
+            city.profession_income_shares[prof] = 0.0
+            city.consumption_levels.setdefault(prof, profile.base_level)
+        return
+
+    prices = getattr(city, "prices", None) or {}
+    for prof, count in effective_counts.items():
+        if count <= 0:
+            continue
+        profile = PROFESSION_CONSUMPTION_PROFILES.get(prof)
+        if profile is None:
+            continue
+
+        share = weights.get(prof, 0.0) / total_weight
+        group_income = wage_pool * share
+        wage = group_income / max(1, int(count))
+        city.profession_income_shares[prof] = share
+        city.profession_wages[prof] = wage
+
+        current_level = float(city.consumption_levels.get(prof, profile.base_level))
+        budget = wage * profile.spend_share
+        basket_cost = profession_consumption_cost(prices, prof, current_level)
+
+        # Hysteresis on the budget/basket ratio:
+        #   budget < basket × lower_threshold  → can't afford basket, lower level
+        #   budget > basket × raise_threshold  → plenty of headroom, raise level
+        #   otherwise                          → hold (the "content" band between)
+        # raise_threshold > 1 ensures we only climb when there's real slack, not
+        # just whenever the decrease condition happens to miss.
+        if budget < basket_cost * profile.lower_threshold:
+            current_level -= profile.decrease_step * CONSUMPTION_DECREASE_MULT
+        elif budget > basket_cost * profile.raise_threshold:
+            current_level += profile.increase_step * CONSUMPTION_INCREASE_MULT
+
+        if current_level < profile.min_level:
+            current_level = profile.min_level
+        elif current_level > profile.max_level:
+            current_level = profile.max_level
+
+        city.consumption_levels[prof] = current_level
 
 
 def staffed_level(city, cell: int, building_level: int) -> int:

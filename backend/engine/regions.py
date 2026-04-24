@@ -50,6 +50,12 @@ _BIOME_EFF: Dict[str, Dict[int, float]] = {
         T.PLAINS: 0.25, T.GRASS: 0.25, T.FOREST: 0.40, T.DFOREST: 0.50,
         T.JUNGLE: 0.30, T.SWAMP: 0.20, T.TUNDRA: 0.60, T.BEACH: 0.10,
     },
+    "iron_ore": {
+        # Vein-injected in mapgen; keep baseline almost null.
+        T.MTN: 0.02, T.HILLS: 0.02, T.SNOW: 0.01, T.DESERT: 0.01,
+        T.PLAINS: 0.0, T.GRASS: 0.0, T.FOREST: 0.0, T.DFOREST: 0.0,
+        T.JUNGLE: 0.0, T.SWAMP: 0.0, T.TUNDRA: 0.0, T.BEACH: 0.0,
+    },
     "stone": {
         T.HILLS: 1.30, T.MTN: 1.50, T.SNOW: 1.00,
         T.PLAINS: 0.40, T.GRASS: 0.40, T.FOREST: 0.55, T.DFOREST: 0.65,
@@ -61,6 +67,20 @@ _BIOME_EFF: Dict[str, Dict[int, float]] = {
         T.HILLS: 1.20, T.MTN: 1.10, T.PLAINS: 0.95, T.GRASS: 0.95,
         T.FOREST: 0.85, T.DFOREST: 0.75, T.DESERT: 0.80, T.TUNDRA: 0.70,
         T.SNOW: 0.50, T.JUNGLE: 0.65, T.SWAMP: 0.55, T.BEACH: 0.70,
+    },
+    "iron": {
+        # Refined iron potential: mirrors ore geography softly.
+        T.HILLS: 0.55, T.MTN: 0.65, T.PLAINS: 0.18, T.GRASS: 0.18,
+        T.FOREST: 0.22, T.DFOREST: 0.20, T.DESERT: 0.16, T.TUNDRA: 0.26,
+        T.SNOW: 0.18, T.JUNGLE: 0.12, T.SWAMP: 0.10, T.BEACH: 0.08,
+    },
+    "sapphires": {
+        # Sapphire fields are injected as rare veins in mapgen.
+        # Keep global baseline effectively zero.
+        T.PLAINS: 0.0, T.GRASS: 0.0, T.JUNGLE: 0.0, T.SWAMP: 0.0,
+        T.FOREST: 0.0, T.DFOREST: 0.0, T.HILLS: 0.0, T.MTN: 0.0,
+        T.DESERT: 0.0, T.TUNDRA: 0.0, T.SNOW: 0.0, T.BEACH: 0.0,
+        T.COAST: 0.0, T.OCEAN: 0.0, T.DEEP: 0.0,
     },
 }
 
@@ -82,6 +102,9 @@ _SEED_OFFSETS: Dict[str, int] = {
     "fabric": 66666,
     "bread":  77777,
     "clothes": 88888,
+    "sapphires": 99999,
+    "iron_ore": 10101,
+    "iron": 20202,
 }
 
 

@@ -41,15 +41,30 @@ _UPGRADABLE_TYPES = {
 _MAX_LEVELS = {
     IMP.FARM:     20,
     IMP.COTTON:   10,
-    IMP.MINE:     5,
-    IMP.QUARRY:   5,
-    IMP.LUMBER:   1,      # Single-level flavour improvement
+    IMP.MINE:     10,
+    IMP.QUARRY:   10,
+    IMP.LUMBER:   10,      # Single-level flavour improvement
     IMP.PASTURE:  1,      # Single-level flavour improvement
     IMP.WINDMILL: 5,
     IMP.FORT:     5,
     IMP.PORT:     5,
     IMP.SMITHERY: 5,
     IMP.FISHERY:  5,
+}
+
+# Profession breakdown per staffed level. Values sum to
+# N_EMPLOYEES_PER_LEVEL — if you change one, change the other.
+_PROFESSIONS_BY_IMP: dict[int, dict[str, int]] = {
+    IMP.FARM:     {"farmer":     9, "aristocrat": 1},
+    IMP.COTTON:   {"farmer":     9, "aristocrat": 1},
+    IMP.LUMBER:   {"lumberjack": 9, "aristocrat": 1},
+    IMP.MINE:     {"miner":      9, "aristocrat": 1},
+    IMP.QUARRY:   {"miner":      9, "aristocrat": 1},
+    IMP.PASTURE:  {"rancher":    9, "aristocrat": 1},
+    IMP.WINDMILL: {"miller":     9, "aristocrat": 1},
+    IMP.PORT:     {"sailor":     9, "aristocrat": 1},
+    IMP.SMITHERY: {"smith":      9, "aristocrat": 1},
+    IMP.FISHERY:  {"fisherman":  9, "aristocrat": 1},
 }
 
 
@@ -79,6 +94,7 @@ def _build_improvements() -> dict:
             staffable=type_id in _STAFFABLE_TYPES,
             upgradable=type_id in _UPGRADABLE_TYPES,
             produces_good=_IMP_PRODUCES.get(type_id),
+            professions=dict(_PROFESSIONS_BY_IMP.get(type_id, {})),
         )
     
     return registry

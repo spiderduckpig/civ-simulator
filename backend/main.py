@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse
 from engine.constants import (
     N, W, H, CELL, IMP, GOODS, GOOD_META, DEFAULT_PARAMS, N_EMPLOYEES_PER_LEVEL,
     TERRAIN_COLORS, IMP_COLORS, TERRAIN_NAMES, IMP_NAMES, RESOURCE_ICONS,
-    GOV_OWNERSHIP_PROFILES,
+    GOV_OWNERSHIP_PROFILES, PROFESSION_META,
 )
 from engine.buildings import BUILDING_TYPES
 from engine.mapgen import gen_map
@@ -113,6 +113,7 @@ def _ser_map(md: MapData) -> dict:
         "imp_names":      {str(k): v for k, v in IMP_NAMES.items()},
         "resource_icons": RESOURCE_ICONS,
         "government_profiles": GOV_OWNERSHIP_PROFILES,
+        "profession_meta":    PROFESSION_META,
         "employee_per_level": N_EMPLOYEES_PER_LEVEL,
         "staffable_imp_types": sorted(int(v) for v in STAFFABLE_TYPES),
         "imp_primary_good": {str(k): v for k, v in IMP_PRIMARY_GOOD.items()},
@@ -168,6 +169,10 @@ def _ser_civs(civs: List[Civ]) -> list:
                     if int(ci.buildings.get(key, 0)) > 0
                 ],
                 "employee_level_count": ci.employee_level_count,
+                "professions":    dict(ci.professions or {}),
+                "profession_wages": dict(ci.profession_wages or {}),
+                "profession_income_shares": dict(ci.profession_income_shares or {}),
+                "consumption_levels": dict(ci.consumption_levels or {}),
                 "hp":             round(ci.hp, 1),
                 "max_hp":         round(ci.max_hp, 1),
                 "last_dmg_tick":  ci.last_dmg_tick,
@@ -180,6 +185,9 @@ def _ser_civs(civs: List[Civ]) -> list:
                 "income_misc":    round(ci.income_misc, 2),
                 "income_total":   round(ci.income_total, 2),
                 "income_per_person": round(ci.income_per_person, 3),
+                "economic_output": round(getattr(ci, "economic_output", 0.0), 2),
+                "avg_consumption_level": round(getattr(ci, "avg_consumption_level", 0.0), 3),
+                "market_satisfaction": round(getattr(ci, "market_satisfaction", 0.0), 3),
                 "attractiveness": round(ci.attractiveness, 3),
                 "net_migration":  round(ci.net_migration, 2),
             } for ci in c.cities],

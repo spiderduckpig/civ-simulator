@@ -149,6 +149,110 @@ def cell_river_mouth(cell: int, ter: list, rivers: Rivers) -> bool:
     return False
 
 
+def _inject_sapphire_veins(seed: int, ter: list, good_efficiency: dict, res: dict) -> None:
+    """Create a handful of rare, high-intensity sapphire veins.
+
+    Outside vein cells, concentration stays at (or near) zero.
+    """
+    field = good_efficiency.get("sapphires")
+    if not field or len(field) != N:
+        field = [0.0] * N
+        good_efficiency["sapphires"] = field
+
+    for i in range(N):
+        field[i] = 0.0
+
+    rng = _random.Random(seed + 9091)
+    vein_count = rng.randint(4, 7)
+    eligible = [
+        i for i in range(N)
+        if ter[i] in (T.HILLS, T.MTN)
+    ]
+    if not eligible:
+        return
+
+    for _ in range(vein_count):
+        cur = rng.choice(eligible)
+        length = rng.randint(10, 26)
+        strength = rng.uniform(2.8, 4.4)
+        visited: set[int] = set()
+        for _step in range(length):
+            visited.add(cur)
+            if ter[cur] in (T.HILLS, T.MTN):
+                field[cur] = max(field[cur], strength)
+                # Keep visual markers sparse: only at strong core cells.
+                if strength >= 3.2 and rng.random() < 0.24:
+                    res[cur] = "sapphires"
+
+            candidates = [
+                n for n in neighbors(cur)
+                if 0 <= n < N and n not in visited and ter[n] in (T.HILLS, T.MTN)
+            ]
+            if not candidates:
+                break
+
+            # Prefer continuing in rugged terrain with local continuity.
+            candidates.sort(
+                key=lambda n: (
+                    -sum(1 for nn in neighbors(n) if 0 <= nn < N and ter[nn] in (T.HILLS, T.MTN)),
+                    rng.random(),
+                )
+            )
+            cur = candidates[0]
+            strength = max(0.8, strength * rng.uniform(0.86, 0.95))
+
+
+def _inject_iron_veins(seed: int, ter: list, good_efficiency: dict, res: dict) -> None:
+    """Inject iron-ore vein concentration and sparse iron resource markers."""
+    ore_field = good_efficiency.get("iron_ore")
+    if not ore_field or len(ore_field) != N:
+        ore_field = [0.0] * N
+        good_efficiency["iron_ore"] = ore_field
+    for i in range(N):
+        ore_field[i] = 0.0
+
+    rng = _random.Random(seed + 6061)
+    vein_count = rng.randint(7, 12)
+    eligible = [i for i in range(N) if ter[i] in (T.HILLS, T.MTN)]
+    if not eligible:
+        return
+
+    for _ in range(vein_count):
+        cur = rng.choice(eligible)
+        length = rng.randint(18, 36)
+        strength = rng.uniform(1.6, 3.1)
+        visited: set[int] = set()
+        for _step in range(length):
+            visited.add(cur)
+            if ter[cur] in (T.HILLS, T.MTN):
+                ore_field[cur] = max(ore_field[cur], strength)
+                if strength >= 2.2 and rng.random() < 0.32:
+                    res[cur] = "iron"
+
+            candidates = [
+                n for n in neighbors(cur)
+                if 0 <= n < N and n not in visited and ter[n] in (T.HILLS, T.MTN)
+            ]
+            if not candidates:
+                break
+            candidates.sort(
+                key=lambda n: (
+                    -sum(1 for nn in neighbors(n) if 0 <= nn < N and ter[nn] in (T.HILLS, T.MTN)),
+                    rng.random(),
+                )
+            )
+            cur = candidates[0]
+            strength = max(0.5, strength * rng.uniform(0.88, 0.96))
+
+    # Keep refined-iron map mode meaningful by deriving it from ore veins.
+    iron_field = good_efficiency.get("iron")
+    if not iron_field or len(iron_field) != N:
+        iron_field = [0.0] * N
+        good_efficiency["iron"] = iron_field
+    for i in range(N):
+        iron_field[i] = ore_field[i] * 0.65
+
+
 # ── Map generation ────────────────────────────────────────────────────────────
 
 def gen_map(seed: int) -> MapData:
@@ -227,7 +331,7 @@ def gen_map(seed: int) -> MapData:
             if rl < 0.12:
                 idx = int(rl * 100) % 4
                 if t2 in (T.MTN, T.HILLS):
-                    tp = ["iron", "gold", "stone", "gems"][idx % 4]
+                    tp = ["gold", "stone", "gems"][idx % 3]
                 elif t2 in (T.FOREST, T.DFOREST, T.JUNGLE):
                     tp = ["wood", "spices", "ivory"][idx % 3]
                 elif t2 == T.BEACH:
@@ -237,7 +341,7 @@ def gen_map(seed: int) -> MapData:
                 elif t2 == T.DESERT:
                     tp = ["gold", "gems", "spices"][idx % 3]
                 else:
-                    tp = "iron"
+                    tp = "stone"
                 res[i] = tp
 
     rivers = gen_rivers(hm, ter, seed)
@@ -245,6 +349,8 @@ def gen_map(seed: int) -> MapData:
 
     # Per-good efficiency maps: biome × low-frequency regional noise.
     good_efficiency = gen_efficiency_maps(ter, rivers, seed, tm)
+    _inject_iron_veins(seed, ter, good_efficiency, res)
+    _inject_sapphire_veins(seed, ter, good_efficiency, res)
 
     return MapData(
         hm=hm,

@@ -6,8 +6,8 @@ import random
 from typing import Callable, Optional
 
 from .constants import (
-    N, IMP, FOCUS, T,
-    INVEST_MAX_PER_TICK, INVEST_PERIOD_TICKS, FOCUS_HMM_PERIOD,
+    N, IMP, FOCUS, T, CAN_FARM,
+    INVEST_PERIOD_TICKS, FOCUS_HMM_PERIOD,
     FORT_BUILD_METAL_COST, BASE_PRICES, N_EMPLOYEES_PER_LEVEL,
 )
 from . import employment
@@ -17,7 +17,7 @@ from .improvements import (
     max_level, UPGRADABLE_TYPES,
     best_improvement, advanced_structure_for,
 )
-from .helpers import neighbors
+from .helpers import neighbors, cell_on_river
 from .buildings import BUILDING_TYPES, get_building_type
 from .government import ensure_government
 from .models import City, Civ
@@ -26,8 +26,42 @@ from .models import City, Civ
 # Terrain types a fort is allowed to sit on.
 _FORT_TERRAIN = (T.PLAINS, T.GRASS, T.FOREST, T.HILLS)
 
-# Rare-rebuild probability per eligible city per investment tick.
-REBUILD_CHANCE = 0.004
+# Construction economics tuning.
+NEW_TILE_BASE_COST = 500.0
+NEW_BUILDING_BASE_COST = 3000.0
+CAPEX_PAYBACK_TICKS = 240.0
+BUILDING_PAYBACK_TICKS = 180.0
+
+# Slack-driven payback relief. When a city has idle labor AND gold piling up,
+# the payback window is stretched so marginal builds still clear the gate —
+# absorbing workers and draining reserves instead of stalling in an
+# oversupply trap. Both weights are per-person ratios so the knobs are
+# scale-invariant; the final boost multiplies (unemp × gold) so both
+# conditions must be present, matching the user's intent.
+_SLACK_UNEMP_FLOOR = 0.03   # unemp rate below this → no relief
+_SLACK_UNEMP_SPAN  = 0.17   # full weight at ~20% unemp
+_SLACK_GOLD_FULL_PP = 2.0   # gold/person that saturates the gold weight
+_SLACK_MAX_BOOST    = 3.0   # payback can stretch up to 4× (1 + 3)
+
+
+def _slack_payback_mult(city: City) -> float:
+    """Return the payback-window multiplier (≥1). Larger = more lenient.
+
+    Only exceeds 1 when BOTH unemployment and gold-per-person are above
+    their floors; either alone leaves the gate at baseline strictness.
+    """
+    pop = max(1.0, float(getattr(city, "population", 0.0)))
+    unemp = int(getattr(city, "unemployed_pop", 0) or 0)
+    unemp_rate = unemp / pop
+    gold = float(getattr(city, "gold", 0.0))
+
+    unemp_weight = max(0.0, min(1.0, (unemp_rate - _SLACK_UNEMP_FLOOR) / _SLACK_UNEMP_SPAN))
+    if unemp_weight <= 0.0:
+        return 1.0
+    gold_weight = max(0.0, min(1.0, (gold / pop) / _SLACK_GOLD_FULL_PP))
+    if gold_weight <= 0.0:
+        return 1.0
+    return 1.0 + unemp_weight * gold_weight * _SLACK_MAX_BOOST
 
 
 def _touch_city_production(city: City) -> None:
@@ -40,8 +74,12 @@ def _upgrade_cost(city: City, it: int, current_level: int) -> float:
     # Base gold cost scales with level. New builds and the first upgrade
     # (current_level 0 or 1) stay at baseline; the ramp is intentionally steep
     # so high-level buildings dominate a city's gold budget.
-    level_mult = max(1.0, current_level) ** 1.8
-    base_gold = 8.0 * level_mult
+    level_mult = max(1.0, current_level) ** 1.4
+    if current_level <= 0:
+        # New improvements on new tiles are intentionally expensive.
+        base_gold = NEW_TILE_BASE_COST
+    else:
+        base_gold = 8.0 * level_mult
     
     # Material requirements (now purely for price scaling)
     mats = {}
@@ -95,67 +133,106 @@ def _building_upgrade_cost(city: City, bkey: str, current_level: int) -> float:
     if b is None:
         return float("inf")
     level_mult = max(1.0, current_level + 1) ** 1.5
-    base_gold = 24.0 * level_mult
+    base_gold = NEW_BUILDING_BASE_COST if current_level <= 0 else 24.0 * level_mult
     mat_cost = 0.0
     for good in b.cost_resources:
         mat_cost += city.prices.get(good, BASE_PRICES.get(good, 1.0)) * 4.0 * level_mult
     return base_gold + mat_cost
 
 
+def _city_is_profitable_for_expansion(city: City) -> bool:
+    """Expansion gate. Scale-relative: thresholds are fractions of population
+    so a 1000-pop city isn't held to the same bar as a 40-pop hamlet."""
+    pop = max(1.0, float(getattr(city, "population", 0.0)))
+    income = float(getattr(city, "income_total", 0.0))
+    satisfaction = float(getattr(city, "market_satisfaction", 0.0))
+    quality_income = income * (0.25 + 0.75 * (satisfaction ** 2.0))
+    # Liquid gold worth ~½ pop unlocks investment regardless of current-tick
+    # quality signal. Keeps slack cities (lots of gold, weak income) from
+    # deadlocking while the stimulus loop catches up.
+    if float(getattr(city, "gold", 0.0)) >= pop * 0.5:
+        return True
+    return quality_income >= pop * 0.01
+
+
 def _try_build_city_buildings(city: City) -> bool:
     """Market-driven city-building investment.
 
-    Evaluates all configured building types and upgrades the most profitable
-    candidate if market conditions justify the capex.
+    Loops so a gold-rich city can stack several upgrades in one call. We
+    project staffing forward each iteration (assuming new levels get filled
+    from unemployment) so the vacancy gate doesn't cap us at two upgrades
+    per building while there are still jobless workers to absorb the levels.
     """
     if not hasattr(city, "buildings") or city.buildings is None:
         city.buildings = {}
     if not hasattr(city, "building_staffing") or city.building_staffing is None:
         city.building_staffing = {}
 
+    if not _city_is_profitable_for_expansion(city):
+        return False
+
     staffing = city.building_staffing
+    remaining_unemployed = int(getattr(city, "unemployed_pop", 0))
+    # Virtual "staffed" delta per key: levels we upgraded this call that we
+    # assume unemployment absorbs. Keeps the vacancy gate from false-tripping
+    # on our own just-added capacity.
+    filled: dict[str, int] = {}
+    upgraded_any = False
+    payback = BUILDING_PAYBACK_TICKS * _slack_payback_mult(city)
 
-    # Pick best positive-margin building among those not at max level.
-    # Do not add levels to a building that already has more than one empty
-    # staffed slot; let the reallocator fill those vacancies first.
-    best_key: Optional[str] = None
-    best_margin = 0.0
-    for key, b in BUILDING_TYPES.items():
-        cur_lvl = int(city.buildings.get(key, 0))
-        if cur_lvl >= b.max_level:
-            continue
+    while True:
+        best_key: Optional[str] = None
+        best_score = 0.0
+        for key, b in BUILDING_TYPES.items():
+            cur_lvl = int(city.buildings.get(key, 0))
+            if cur_lvl >= b.max_level:
+                continue
+            virtual_staffed = int(staffing.get(key, 0)) + filled.get(key, 0)
+            if cur_lvl - virtual_staffed > 1:
+                continue
+            out_v = 0.0
+            for g, amt in b.outputs.items():
+                out_v += amt * city.prices.get(g, BASE_PRICES.get(g, 1.0))
+            in_v = 0.0
+            for g, amt in b.inputs.items():
+                in_v += amt * city.prices.get(g, BASE_PRICES.get(g, 1.0))
+            margin = out_v - in_v
+            cost = _building_upgrade_cost(city, key, cur_lvl)
+            # Payback-style ROI score: positive means the building should
+            # earn back its capex within the payback window. Window stretches
+            # when the city has idle labor + idle gold (see _slack_payback_mult).
+            score = margin - (cost / payback)
+            if score > best_score:
+                best_score = score
+                best_key = key
 
-        vacancy = cur_lvl - int(staffing.get(key, 0))
-        if vacancy > 1:
-            continue
+        if best_key is None or best_score <= 0.0:
+            break
 
-        out_v = 0.0
-        for g, amt in b.outputs.items():
-            out_v += amt * city.prices.get(g, BASE_PRICES.get(g, 1.0))
-        in_v = 0.0
-        for g, amt in b.inputs.items():
-            in_v += amt * city.prices.get(g, BASE_PRICES.get(g, 1.0))
-        margin = out_v - in_v
-        if margin > best_margin:
-            best_margin = margin
-            best_key = key
+        cur_lvl = int(city.buildings.get(best_key, 0))
+        cost = _building_upgrade_cost(city, best_key, cur_lvl)
 
-    if best_key is None or best_margin <= 0.0:
-        return False
+        # Require either unemployment to absorb, or strong enough margin to
+        # pull workers away from existing lower-profit jobs. Friction scales
+        # with the upgrade's own cost: pulling staff into a 2000-gold
+        # megafactory needs a bigger edge than pulling them into a cheap
+        # mill, and this stays meaningful as prices drift.
+        friction_threshold = cost / payback * 0.5
+        if remaining_unemployed < N_EMPLOYEES_PER_LEVEL and best_score < friction_threshold:
+            break
 
-    # Require either unemployment to absorb, or strong enough margin to pull
-    # workers away from existing lower-profit jobs.
-    unemployed = getattr(city, "unemployed_pop", 0)
-    if unemployed < N_EMPLOYEES_PER_LEVEL and best_margin < 1.5:
-        return False
+        if not _try_buy(city, cost):
+            break
 
-    cur_lvl = int(city.buildings.get(best_key, 0))
-    cost = _building_upgrade_cost(city, best_key, cur_lvl)
-    if not _try_buy(city, cost):
-        return False
+        city.buildings[best_key] = cur_lvl + 1
+        if remaining_unemployed >= N_EMPLOYEES_PER_LEVEL:
+            filled[best_key] = filled.get(best_key, 0) + 1
+            remaining_unemployed -= N_EMPLOYEES_PER_LEVEL
+        # else: high-margin upgrade without workers on hand. Don't advance
+        # `filled`; next iter's vacancy check will catch it.
+        upgraded_any = True
 
-    city.buildings[best_key] = cur_lvl + 1
-    return True
+    return upgraded_any
 
 
 # ── Profitability hint ────────────────────────────────────────────────────
@@ -166,6 +243,7 @@ _GOOD_TO_PRODUCER = {
     "fabric": IMP.COTTON,
     "lumber": IMP.LUMBER,
     "copper_ore": IMP.MINE,
+    "iron_ore": IMP.MINE,
     "stone":  IMP.QUARRY,
     "copper": IMP.SMITHERY,
 }
@@ -238,12 +316,110 @@ def _focus_preferred_types(focus: int) -> set:
     if focus == FOCUS.FARMING:
         return {IMP.FARM, IMP.COTTON, IMP.WINDMILL, IMP.FISHERY}
     if focus == FOCUS.MINING:
-        return {IMP.MINE, IMP.QUARRY, IMP.SMITHERY}
+        return {IMP.MINE, IMP.QUARRY}
     if focus == FOCUS.DEFENSE:
         return {IMP.FORT, IMP.FARM}
     if focus == FOCUS.TRADE:
         return {IMP.PORT, IMP.FISHERY, IMP.FARM, IMP.COTTON}
     return {IMP.FARM}
+
+
+def _tile_profit(
+    city: City, cell: int, imp_type_id: int, ter: list, res: dict, rivers: dict,
+    good_efficiency: dict | None,
+) -> float:
+    """Gold/tick for one staffed level of ``imp_type_id`` at ``cell``."""
+    t = ter[cell]
+
+    if imp_type_id == IMP.FARM:
+        if not (t in CAN_FARM or (
+            cell_on_river(cell, rivers)
+            and t not in (T.DEEP, T.OCEAN, T.COAST, T.MTN, T.SNOW, T.BEACH, T.TUNDRA, T.DESERT)
+        )):
+            return 0.0
+    elif imp_type_id == IMP.COTTON:
+        if not (t in CAN_FARM or (
+            cell_on_river(cell, rivers)
+            and t not in (T.DEEP, T.OCEAN, T.COAST, T.MTN, T.SNOW, T.BEACH, T.TUNDRA, T.DESERT)
+        )):
+            return 0.0
+    elif imp_type_id == IMP.FISHERY:
+        if not any(0 <= n < N and ter[n] <= T.COAST for n in neighbors(cell)):
+            return 0.0
+    elif imp_type_id == IMP.LUMBER:
+        if t not in (T.FOREST, T.DFOREST, T.JUNGLE):
+            return 0.0
+    elif imp_type_id == IMP.QUARRY:
+        if t not in (T.HILLS, T.MTN):
+            return 0.0
+    elif imp_type_id == IMP.MINE:
+        if t <= T.COAST:
+            return 0.0
+    else:
+        return 0.0
+
+    return employment._profit_per_level(
+        cell, make_imp(imp_type_id, 1), city, ter, res, rivers, good_efficiency or city.local_efficiency,
+    )
+
+
+# Primary good produced by each tile imp. Drives the need signal (local
+# price ratio) and the intra-call saturation decay. FARM and FISHERY share
+# "grain" deliberately: both feed the same market, so building one should
+# dampen desire for the other in the same call.
+_IMP_TO_GOOD = {
+    IMP.FARM:    "grain",
+    IMP.FISHERY: "grain",
+    IMP.COTTON:  "fabric",
+    IMP.LUMBER:  "lumber",
+    IMP.MINE:    "copper_ore",
+    IMP.QUARRY:  "stone",
+}
+
+# After placing N of the same good in one call, multiply the next candidate
+# of that good by this factor^N. 0.5 is aggressive enough that the loop
+# flips to a different scarce good after ~1-2 builds.
+_SATURATION_DECAY = 0.5
+
+# Score multiplier when a candidate matches the civ's current build_type.
+# Kept moderate so a genuinely scarce good can still beat a mismatched goal.
+_GOAL_PREFERENCE_BONUS = 1.4
+
+# Clamp for the need multiplier — ratio floor prevents negative feedback
+# from collapsing a glutted good's score to zero (we may still want to
+# replace a unstaffed tile), ceiling keeps a single price spike from
+# overwhelming profitability entirely.
+_NEED_MIN = 0.3
+_NEED_MAX = 3.5
+
+
+def _need_multiplier(city: City, good: str | None) -> float:
+    """How badly the city wants more of ``good``, as a score multiplier.
+
+    Uses the local price ratio (``city.prices[good] / BASE_PRICES[good]``)
+    directly — scarce goods trade above base, glutted goods below. A ratio
+    of 1.0 is neutral; 2.0 doubles the tile's score, 0.5 halves it.
+    """
+    if not good:
+        return 1.0
+    base = BASE_PRICES.get(good, 1.0)
+    price = city.prices.get(good, base)
+    ratio = price / max(base, 0.01)
+    return max(_NEED_MIN, min(_NEED_MAX, ratio))
+
+
+# Max tile-level upgrades the development loop will allow stacked on a single
+# tile in one call. Stops a greedy city from taking a farm L1 → L49 in one
+# invest tick just because it has the gold; forces growth to spread across
+# tiles and types. Across multiple ticks the tile can still climb to max.
+_MAX_UPGRADES_PER_TILE_PER_CALL = 5
+
+# Tolerance for unstaffed levels on a tile before we refuse to upgrade it.
+# Ensures we fill existing capacity before piling on more.
+_MAX_UNSTAFFED_FOR_UPGRADE = 1
+
+
+_BUILD_CANDS = (IMP.FARM, IMP.COTTON, IMP.FISHERY, IMP.LUMBER, IMP.MINE, IMP.QUARRY)
 
 
 # ── Focus HMM transitions ──────────────────────────────────────────────────
@@ -257,6 +433,7 @@ def _focus_transition(
     # Use supply dict for signals
     grain = city.supply.get("grain", 0.0) + city.supply.get("bread", 0.0)
     copper_ore = city.supply.get("copper_ore", 0.0)
+    iron_ore = city.supply.get("iron_ore", 0.0)
     stone = city.supply.get("stone", 0.0)
     
     # Trade potential is now more abstract but we can use gold income or 
@@ -267,7 +444,7 @@ def _focus_transition(
     # Scale-free evidence signals (all fractions of population, not raw numbers)
     food_deficit = grain < pop * 0.12
     food_surplus = grain > pop * 0.25
-    ore_rich     = (copper_ore + stone) > pop * 0.05
+    ore_rich     = (copper_ore + iron_ore + stone) > pop * 0.05
     trade_rich   = trade > pop * 0.25
 
     # Build transition weights from current state f.
@@ -380,8 +557,8 @@ def _place_advanced_structure(
         for t in tiles
     )
     # Check current copper ore availability too
-    current_production_ore = city.supply.get("copper_ore", 0.0)
-    current_imports_ore = city.net_imports.get("copper_ore", 0.0)
+    current_production_ore = city.supply.get("copper_ore", 0.0) + city.supply.get("iron_ore", 0.0)
+    current_imports_ore = city.net_imports.get("copper_ore", 0.0) + city.net_imports.get("iron_ore", 0.0)
     has_ore = current_production_ore > 0.1 or current_imports_ore > 0.1 or has_ore_potential
 
     focus = city.focus
@@ -389,8 +566,6 @@ def _place_advanced_structure(
     for cell in empties[:20]:
         pick = advanced_structure_for(cell, ter, impr, focus, rand=rand)
         if pick == IMP.NONE:
-            continue
-        if pick == IMP.SMITHERY and not has_ore:
             continue
         it = pick
         costs = _upgrade_cost(city, it, 0)
@@ -516,114 +691,72 @@ def _place_fort(
 
 def _rebuild_improvement(
     city: City, ter: list, res: dict, rivers: dict, impr: list,
-    *, rand: Callable[[], float] = random.random,
+    good_efficiency: dict | None,
 ) -> bool:
-    """Replace one existing improvement in this city with a freshly-picked
-    one. Intentionally rare and expensive — cities don't normally bulldoze.
+    """Demolish a low-value tile and rebuild a better level-1 producer.
 
-    Prefers tiles whose current type doesn't match the city's focus.
+    Triggered as a fallback when normal build/upgrade actions cannot proceed.
+    Prefers replacing unstaffed low-profit tiles and only rebuilds when the
+    alternative has a clear profitability gain.
     """
     tiles = city.tiles
     if not tiles:
         return False
 
-    focus = city.focus
-    pref  = _focus_preferred_types(focus)
+    staffing = city.staffing
+    best_choice: Optional[tuple[float, int, int]] = None
+    best_gain = 0.0
+    payback = CAPEX_PAYBACK_TICKS * _slack_payback_mult(city)
 
-    # Candidates: occupied tiles whose current improvement is NOT in the
-    # focus-preferred set. That way you don't bulldoze a level-5 mine to
-    # build another mine.
-    mismatches = []
     for cell in tiles:
         if not (0 <= cell < N):
             continue
         raw = impr[cell]
-        if not raw:
+        if raw == IMP.NONE:
             continue
-        if imp_type(raw) in pref:
+        cur_type = imp_type(raw)
+        if cur_type in (IMP.FORT, IMP.PORT, IMP.WINDMILL):
             continue
-        mismatches.append(cell)
 
-    if not mismatches:
+        cur_profit = _tile_profit(city, cell, cur_type, ter, res, rivers, good_efficiency)
+        cur_lvl = imp_level(raw)
+        cur_staff = staffing.get(cell, 0)
+        staffed_ratio = (cur_staff / cur_lvl) if cur_lvl > 0 else 0.0
+        keep_value = cur_profit * max(0.1, staffed_ratio)
+
+        best_alt_type: Optional[int] = None
+        best_alt_profit = 0.0
+        for cand in (IMP.FARM, IMP.COTTON, IMP.FISHERY, IMP.LUMBER, IMP.MINE, IMP.QUARRY):
+            if cand == cur_type:
+                continue
+            p = _tile_profit(city, cell, cand, ter, res, rivers, good_efficiency)
+            if p > best_alt_profit:
+                best_alt_profit = p
+                best_alt_type = cand
+
+        if best_alt_type is None or best_alt_profit <= 0.0:
+            continue
+
+        rebuild_cost = _upgrade_cost(city, best_alt_type, 0) * 1.6
+        gain = best_alt_profit - keep_value - (rebuild_cost / payback)
+        if gain > best_gain and best_alt_profit >= keep_value * 1.35 + 0.2:
+            best_gain = gain
+            best_choice = (gain, cell, best_alt_type)
+
+    if best_choice is None:
         return False
-    random.shuffle(mismatches)
 
-    for cell in mismatches[:4]:
-        pick = best_improvement(ter, res, cell, rivers, focus, rand=rand)
-        if pick == IMP.NONE or pick == imp_type(impr[cell]):
-            continue
-        # Rebuild is expensive: roughly 3× a normal placement.
-        cost = _upgrade_cost(city, pick, 0) * 3.0
-        if not _try_buy(city, cost):
-            return False
-        impr[cell] = make_imp(pick, 1)
-        _touch_city_production(city)
-        return True
-    return False
-
-
-# ── Public entry: per-civ per-tick city development ───────────────────────
-
-def _try_upgrade(city: City, build_type: int, impr: list, civ: Civ | None = None) -> bool:
-    """Upgrade the lowest-level instance of ``build_type`` in this city."""
-    best_cell = -1
-    best_lvl = max_level(build_type)
-    for cell in city.tiles:
-        if not (0 <= cell < N):
-            continue
-        raw = impr[cell]
-        if imp_type(raw) != build_type:
-            continue
-        lvl = imp_level(raw)
-        if lvl >= max_level(build_type):
-            continue
-        if lvl < best_lvl:
-            best_lvl = lvl
-            best_cell = cell
-    if best_cell < 0:
+    _, cell, new_type = best_choice
+    cost = _upgrade_cost(city, new_type, 0) * 1.6
+    if not _try_buy(city, cost):
         return False
-    cost = _upgrade_cost(city, build_type, best_lvl)
-    if build_type == IMP.FORT and civ is not None:
-        if not _try_buy_fort(city, civ, cost):
-            return False
-    elif not _try_buy(city, cost):
-        return False
-    impr[best_cell] = upgrade_imp(impr[best_cell])
+
+    impr[cell] = make_imp(new_type, 1)
     _touch_city_production(city)
     return True
 
 
-def _try_build_new(
-    city: City, build_type: int, impr: list,
-    civ: Civ | None = None, ter: list | None = None,
-    res: dict | None = None, rivers: dict | None = None, om: list | None = None,
-) -> bool:
-    """Place a fresh improvement of ``build_type`` on an empty tile."""
-    empties = [c for c in city.tiles if 0 <= c < N and impr[c] == IMP.NONE]
-    if not empties:
-        if build_type == IMP.FORT and civ is not None and ter is not None:
-            return _place_fort(city, civ, ter, impr, set(city.tiles), set(), om or [])
-        return False
-    random.shuffle(empties)
-    for cell in empties[:15]:
-        cost = _upgrade_cost(city, build_type, 0)
-        if build_type == IMP.FORT and civ is not None:
-            if not _try_buy_fort(city, civ, cost):
-                return False
-        elif not _try_buy(city, cost):
-            return False  # can't afford — no point trying more cells
-        impr[cell] = make_imp(build_type, 1)
-        _touch_city_production(city)
-        return True
-    return False
-
-
-def _city_has_no_buildings(city: City, impr: list) -> bool:
-    for c in city.tiles:
-        if 0 <= c < N and impr[c] != IMP.NONE:
-            return False
-    return True
-
+# ── Public entry: per-civ per-tick city development ───────────────────────
 
 def _pick_build_type(city: City, goal_imp: Optional[int], impr: list) -> int:
     """Decide what this city should work on this tick.
@@ -642,65 +775,176 @@ def _pick_build_type(city: City, goal_imp: Optional[int], impr: list) -> int:
     return profitable if profitable is not None else IMP.FARM
 
 
-def _unstaffed_levels(city: City, impr: list) -> int:
-    """Total staffable building levels not currently filled. A city with
-    plenty of empty capacity shouldn't keep building new structures — it
-    should upgrade existing ones or just save gold until population grows.
+def _develop_tiles(
+    city: City, civ: Civ, build_type: int, impr: list,
+    ter: list, res: dict, rivers: dict, om: list,
+    *, good_efficiency: dict | None = None,
+) -> bool:
+    """Greedy unified development loop.
+
+    Prices/efficiencies/terrain are stable during one call, so we precompute
+    the (profit, good, kind) tuple per (tile, candidate) once and re-score
+    cheaply each iteration — dropping the hot ``_tile_profit`` path from
+    O(K × T × 6) to O(T × 6) + O(K × T).
+
+    Each entry list mutates in place after an action:
+      * build  → cell's list becomes at most one upgrade entry at lvl 1
+      * upgrade → entry's lvl bumps; list drops when max_level hits
+
+    Gates preserved: unemployment for builds, unstaffed cap for upgrades,
+    per-tile upgrade cap. Saturation and need are applied at scan time.
     """
-    total = 0
-    staffing = city.staffing
+    remaining_unemployed = int(getattr(city, "unemployed_pop", 0))
+    built_by_good: dict[str, int] = {}
+    upgrades_this_call: dict[int, int] = {}
+    any_action = False
+    staffing = getattr(city, "staffing", None) or {}
+    payback = CAPEX_PAYBACK_TICKS * _slack_payback_mult(city)
+
+    # Precompute valid candidates per tile. Entry layout:
+    # [imp_type, kind ('build'|'upgrade'), profit, good, lvl]
+    tile_entries: dict[int, list[list]] = {}
     for cell in city.tiles:
         if not (0 <= cell < N):
             continue
         raw = impr[cell]
-        it = imp_type(raw)
-        if it not in _STAFFABLE:
-            continue
-        total += imp_level(raw) - staffing.get(cell, 0)
-    return total
+        entries: list[list] = []
+        if raw == IMP.NONE:
+            for cand in _BUILD_CANDS:
+                profit = _tile_profit(city, cell, cand, ter, res, rivers, good_efficiency)
+                if profit <= 0:
+                    continue
+                entries.append([cand, "build", profit, _IMP_TO_GOOD.get(cand), 0])
+        else:
+            it = imp_type(raw)
+            if it in UPGRADABLE_TYPES:
+                lvl = imp_level(raw)
+                if lvl < max_level(it):
+                    profit = _tile_profit(city, cell, it, ter, res, rivers, good_efficiency)
+                    if profit > 0:
+                        entries.append([it, "upgrade", profit, _IMP_TO_GOOD.get(it), lvl])
+        if entries:
+            tile_entries[cell] = entries
+
+    # Cache need multipliers per good — prices stable during call.
+    need_cache: dict[Optional[str], float] = {}
+
+    while tile_entries:
+        best_score = 0.0
+        best_cell = -1
+        best_entry: Optional[list] = None
+
+        for cell, entries in tile_entries.items():
+            tile_up_count = upgrades_this_call.get(cell, 0)
+            staffed = int(staffing.get(cell, 0))
+            for entry in entries:
+                imp_t, kind, profit, good, lvl = entry
+                if kind == "build":
+                    if remaining_unemployed < N_EMPLOYEES_PER_LEVEL:
+                        continue
+                    capex = _upgrade_cost(city, imp_t, 0)
+                    base = profit - capex / payback
+                else:
+                    if tile_up_count >= _MAX_UPGRADES_PER_TILE_PER_CALL:
+                        continue
+                    unstaffed = lvl - staffed
+                    if unstaffed > _MAX_UNSTAFFED_FOR_UPGRADE:
+                        continue
+                    if remaining_unemployed < N_EMPLOYEES_PER_LEVEL and unstaffed >= 1:
+                        continue
+                    cost = _upgrade_cost(city, imp_t, lvl)
+                    base = profit - cost / payback
+                if base <= 0:
+                    continue
+
+                if good in need_cache:
+                    need = need_cache[good]
+                else:
+                    need = _need_multiplier(city, good)
+                    need_cache[good] = need
+                sat = _SATURATION_DECAY ** built_by_good.get(good, 0) if good else 1.0
+                goal = _GOAL_PREFERENCE_BONUS if build_type == imp_t else 1.0
+                score = base * need * sat * goal
+                if score > best_score:
+                    best_score = score
+                    best_cell = cell
+                    best_entry = entry
+
+        if best_entry is None:
+            break
+
+        imp_t, kind, profit, good, lvl = best_entry
+        cost = _upgrade_cost(city, imp_t, 0 if kind == "build" else lvl)
+
+        is_fort = (imp_t == IMP.FORT and civ is not None)
+        if is_fort:
+            if not _try_buy_fort(city, civ, cost):
+                break
+        elif not _try_buy(city, cost):
+            break
+
+        if kind == "build":
+            impr[best_cell] = make_imp(imp_t, 1)
+            if imp_t in UPGRADABLE_TYPES and max_level(imp_t) > 1:
+                tile_entries[best_cell] = [[imp_t, "upgrade", profit, good, 1]]
+            else:
+                tile_entries.pop(best_cell, None)
+        else:
+            impr[best_cell] = upgrade_imp(impr[best_cell])
+            new_lvl = lvl + 1
+            upgrades_this_call[best_cell] = upgrades_this_call.get(best_cell, 0) + 1
+            if new_lvl >= max_level(imp_t):
+                tile_entries.pop(best_cell, None)
+            else:
+                best_entry[4] = new_lvl
+
+        if good:
+            built_by_good[good] = built_by_good.get(good, 0) + 1
+        remaining_unemployed = max(0, remaining_unemployed - N_EMPLOYEES_PER_LEVEL)
+        any_action = True
+
+    if any_action:
+        _touch_city_production(city)
+    return any_action
 
 
 def _try_one_action(
     city: City, civ: Civ, goal_imp: Optional[int], impr: list,
     ter: list, res: dict, rivers: dict, om: list,
-    *, build_type: Optional[int] = None,
+    *, build_type: Optional[int] = None, good_efficiency: dict | None = None,
 ) -> bool:
-    """Attempt a single build-or-upgrade action for this city. Biased to
-    build new capacity when the city has unemployed workers (they need
-    somewhere to work).
+    """Run one investment action for this city.
+
+    The unified ``_develop_tiles`` loop handles builds + upgrades under a
+    single market-weighted score. Falls through to fort placement (which
+    has its own border-biased logic) when the goal is FORT, and to a tile
+    rebuild if nothing else scored positive.
     """
     if build_type is None:
         build_type = _pick_build_type(city, goal_imp, impr)
-    unemployed = getattr(city, "unemployed_pop", 0)
-    # Don't stack unstaffed capacity: if there's already room for a full
-    # employment level sitting idle, upgrading is the only sensible move.
-    idle_capacity = _unstaffed_levels(city, impr)
-    excess_capacity = idle_capacity >= 2
 
-    # Unemployment → prefer new building. No unemployment → prefer upgrade.
-    if unemployed >= N_EMPLOYEES_PER_LEVEL and not excess_capacity:
-        if _try_build_new(city, build_type, impr, civ, ter, res, rivers, om):
+    if _develop_tiles(city, civ, build_type, impr, ter, res, rivers, om,
+                      good_efficiency=good_efficiency):
+        return True
+
+    if build_type == IMP.FORT and civ is not None:
+        if _place_fort(city, civ, ter, impr, set(city.tiles), set(), om or []):
             return True
-        return _try_upgrade(city, build_type, impr, civ)
-    else:
-        if _try_upgrade(city, build_type, impr, civ):
-            return True
-        if excess_capacity:
-            return False  # don't sprawl more unstaffed buildings
-        return _try_build_new(city, build_type, impr, civ, ter, res, rivers, om)
+
+    return _rebuild_improvement(city, ter, res, rivers, impr, good_efficiency)
 
 
 def tick_city_development(
     civ: Civ, wars: dict, ter: list, res: dict, rivers: dict, impr: list,
     tick: int, om: Optional[list] = None,
+    good_efficiency: Optional[dict] = None,
 ) -> None:
     """Per-tick building decisions for every city in the civ.
 
-    Each city attempts up to ``INVEST_MAX_PER_TICK`` build/upgrade actions,
-    independently, so non-capital cities actually develop. The civ-level
-    goal queue still biases *what* to build (via ``_pick_build_type``) but
-    no longer gates *who* gets to build: the rule used to be "one city per
-    goal-advance," which left everything but the capital empty.
+    Each city takes one tile-development action per investment tick: either
+    a single new build/rebuild, or an upgrade action that may apply multiple
+    levels while the city can still pay. This keeps expansion controlled
+    without slowing vertical development.
     """
     if not civ.cities:
         return
@@ -715,7 +959,6 @@ def tick_city_development(
         "MINE":     IMP.MINE,
         "LUMBER":   IMP.LUMBER,
         "QUARRY":   IMP.QUARRY,
-        "SMITHERY": IMP.SMITHERY,
         "FORT":     IMP.FORT,
     }
 
@@ -758,14 +1001,10 @@ def tick_city_development(
     changed_cities: dict[int, City] = {}
     for city in city_iter:
         city_build_type = _pick_build_type(city, goal_imp, impr)
-        # Struggling cities (no buildings at all) get extra tries so they
-        # never sit at the starvation floor forever.
-        budget = INVEST_MAX_PER_TICK
-        if _city_has_no_buildings(city, impr):
-            budget += 2
-        for _ in range(budget):
-            if not _try_one_action(city, civ, goal_imp, impr, ter, res, rivers, om, build_type=city_build_type):
-                break
+        if _try_one_action(
+            city, civ, goal_imp, impr, ter, res, rivers, om,
+            build_type=city_build_type, good_efficiency=good_efficiency,
+        ):
             any_built = True
             changed_cities[city.cell] = city
 

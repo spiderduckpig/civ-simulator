@@ -88,6 +88,136 @@ function goodLabel(good) {
     return String(good).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
+function getProfessionMeta() {
+    return (mapData && mapData.profession_meta && typeof mapData.profession_meta === "object")
+        ? mapData.profession_meta
+        : {};
+}
+
+function getEffectiveProfessionCounts(city) {
+    return { ...(city.professions || {}) };
+}
+
+function calcAverageConsumptionLevelForCounts(counts, levels) {
+    const entries = Object.entries(counts || {}).filter(([, c]) => Number(c) > 0);
+    if (!entries.length) return 0;
+    let num = 0;
+    let den = 0;
+    for (const [prof, cntRaw] of entries) {
+        const cnt = Number(cntRaw || 0);
+        const lvl = Number((levels || {})[prof] || 0);
+        num += cnt * lvl;
+        den += cnt;
+    }
+    return den > 0 ? num / den : 0;
+}
+
+function calcCityAverageConsumptionLevel(city) {
+    return calcAverageConsumptionLevelForCounts(
+        getEffectiveProfessionCounts(city),
+        city.consumption_levels || {},
+    );
+}
+
+function calcNationalAverageConsumptionLevel(civ) {
+    if (!civ || !Array.isArray(civ.cities) || !civ.cities.length) return 0;
+    let num = 0;
+    let den = 0;
+    for (const city of civ.cities) {
+        const counts = getEffectiveProfessionCounts(city);
+        for (const [prof, cntRaw] of Object.entries(counts)) {
+            const cnt = Number(cntRaw || 0);
+            if (cnt <= 0) continue;
+            const lvl = Number((city.consumption_levels || {})[prof] || 0);
+            num += cnt * lvl;
+            den += cnt;
+        }
+    }
+    return den > 0 ? num / den : 0;
+}
+
+// Build a single-ring SVG pie with a colour-legend sibling. ``entries`` is
+// already sorted; each entry is {key, count, color, label, icon}. Total is
+// the headcount sum. A single-profession city draws a full circle to dodge
+// the degenerate M/L/A path when sweep is exactly 2π.
+function renderProfessionPie(entries, total, size) {
+    if (!entries.length || total <= 0) {
+        return `<div style="font-size:9px;color:#8b949e">No employees</div>`;
+    }
+    const r = size / 2 - 1;
+    const cx = size / 2, cy = size / 2;
+    let slices = "";
+    if (entries.length === 1) {
+        slices = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${entries[0].color}" stroke="#0b1016" stroke-width="0.5"/>`;
+    } else {
+        let a = -Math.PI / 2;
+        for (const e of entries) {
+            const sweep = (e.count / total) * Math.PI * 2;
+            const a2 = a + sweep;
+            const large = sweep > Math.PI ? 1 : 0;
+            const x1 = cx + r * Math.cos(a), y1 = cy + r * Math.sin(a);
+            const x2 = cx + r * Math.cos(a2), y2 = cy + r * Math.sin(a2);
+            slices += `<path d="M ${cx} ${cy} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z" fill="${e.color}" stroke="#0b1016" stroke-width="0.5"/>`;
+            a = a2;
+        }
+    }
+    return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="flex-shrink:0">${slices}</svg>`;
+}
+
+function renderProfessionsSection(city, civ) {
+    const profMeta = getProfessionMeta();
+    const profs = getEffectiveProfessionCounts(city);
+    const wages = city.profession_wages || {};
+    const levels = city.consumption_levels || {};
+    const shares = city.profession_income_shares || {};
+    const entries = Object.entries(profs)
+        .filter(([, v]) => v > 0)
+        .map(([key, count]) => {
+            const m = profMeta[key] || {};
+            return {
+                key,
+                count,
+                color: m.color || "#8b949e",
+                icon:  m.icon  || "•",
+                label: m.label || key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
+                wage: Number(wages[key] || 0),
+                level: Number(levels[key] || 0),
+                share: Number(shares[key] || 0),
+            };
+        })
+        .sort((a, b) => b.count - a.count);
+    const total = entries.reduce((a, e) => a + e.count, 0);
+    const cityAvgConsumption = calcCityAverageConsumptionLevel(city);
+    const nationalAvgConsumption = city.is_capital ? calcNationalAverageConsumptionLevel(civ) : null;
+    const avgWage = total > 0
+        ? entries.reduce((s, e) => s + e.wage * e.count, 0) / total
+        : 0;
+
+    const legend = entries.map(e => {
+        const pct = total > 0 ? (e.count / total * 100).toFixed(1) : "0.0";
+        const sharePct = (e.share * 100).toFixed(1);
+        return `<div style="display:flex;align-items:center;gap:4px;font-size:9px;margin-bottom:2px">
+            <span style="width:8px;height:8px;background:${e.color};border-radius:2px;display:inline-block;flex-shrink:0"></span>
+            <span>${e.icon} ${e.label}</span>
+            <span style="margin-left:auto;color:#8b949e">${e.count} · ${pct}% · ₿${e.wage.toFixed(2)} wage · C${e.level.toFixed(2)} · ${sharePct}% share</span>
+        </div>`;
+    }).join("");
+    return `
+        <div class="city-panel-section">
+            <div class="city-panel-section-label">Professions (${total})</div>
+            <div style="font-size:9px;color:#8b949e;margin-bottom:5px">
+                City avg consumption: <span style="color:#c9d1d9">C${cityAvgConsumption.toFixed(2)}</span>
+                ${city.is_capital ? ` · National avg: <span style="color:#58a6ff">C${(nationalAvgConsumption || 0).toFixed(2)}</span>` : ""}
+                · Avg wage: <span style="color:#c9d1d9">₿${avgWage.toFixed(2)}</span>
+            </div>
+            <div style="display:flex;gap:10px;align-items:flex-start">
+                ${renderProfessionPie(entries, total, 90)}
+                <div style="flex:1;min-width:0">${legend || `<div style="font-size:9px;color:#8b949e">No employees</div>`}</div>
+            </div>
+        </div>
+    `;
+}
+
 function populateResourceGoodSelect() {
     const prev = selResGood.value;
     const goods = getGoodKeys();
@@ -196,8 +326,10 @@ function updateUI() {
     nationList.innerHTML = sorted.map(civ => {
         const atWar = wars.some(w => w.att === civ.id || w.def_id === civ.id);
         const sel   = civ.id === selectedId;
-        const econ = (civ.cities || []).reduce((sum, city) => sum + (city.income_total || 0), 0);
-        const econLabel = econ >= 0 ? `+${econ.toFixed(1)}` : econ.toFixed(1);
+        const econSize = (civ.cities || []).reduce((sum, city) => sum + (city.economic_output || 0), 0);
+        const netInc = (civ.cities || []).reduce((sum, city) => sum + (city.income_total || 0), 0);
+        const netLabel = netInc >= 0 ? `+${netInc.toFixed(1)}` : netInc.toFixed(1);
+        const econLabel = `${econSize.toFixed(0)} · ${netLabel}`;
         return `
         <div class="civ-row${sel ? " selected" : ""}" data-id="${civ.id}">
             <div class="civ-row-top">
@@ -336,6 +468,7 @@ function renderSelectedCityPanel(city, civ) {
     const unemployed = city.unemployed_pop || 0;
     const net = city.income_total || 0;
     const netColor = net >= 0 ? "#3fb950" : "#f85149";
+    const econOut = city.economic_output || 0;
     const pull = city.attractiveness ?? 1.0;
     const netMig = city.net_migration ?? 0.0;
     const pullColor = pull > 1.3 ? "#3fb950" : (pull < 0.7 ? "#f85149" : "#f0c040");
@@ -445,7 +578,7 @@ function renderSelectedCityPanel(city, civ) {
         <div class="city-panel-sub">${tags.join(" · ") || "City"}</div>
         <div>👥 Pop ${city.population|0} · 💰 Gold ${city.gold|0}</div>
         <div>💼 Workforce ${workforce} · Employed ${employed} · Unemployed ${unemployed}</div>
-        <div>📈 Net Income <span style="color:${netColor}">₿${net.toFixed(2)}/t</span> · Per Person ₿${(city.income_per_person || 0).toFixed(3)}</div>
+        <div>🏦 Economy Size ₿${econOut.toFixed(1)}/t · 📈 Net Income <span style="color:${netColor}">₿${net.toFixed(2)}/t</span> · Per Person ₿${(city.income_per_person || 0).toFixed(3)}</div>
         <div>🧭 Pull <span style="color:${pullColor}">${pull.toFixed(2)}</span> · <span style="color:${migColor}">${migArrow} ${migLabel}</span></div>
 
         <div class="city-panel-section">
@@ -457,6 +590,8 @@ function renderSelectedCityPanel(city, civ) {
             <div class="city-panel-section-label">Buildings</div>
             ${buildingRows}
         </div>
+
+        ${renderProfessionsSection(city, civ)}
         ${governmentSection}
     `;
 }
@@ -760,12 +895,16 @@ function showTooltip(x, y, info) {
         const migColor = netMig > 0.05 ? "#3fb950" : (netMig < -0.05 ? "#f85149" : "#8b949e");
         const migArrow = netMig > 0.05 ? "↑" : (netMig < -0.05 ? "↓" : "·");
         const migLabel = netMig > 0.05 ? `+${netMig.toFixed(1)} incoming` : (netMig < -0.05 ? `${netMig.toFixed(1)} leaving` : "steady");
+        const consLvl = c.avg_consumption_level || 0;
         lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Migration</div>`);
         lines.push(`<div style="font-size:10px">🧭 Pull <span style="color:${pullColor}">${pull.toFixed(2)}</span> · <span style="color:${migColor}">${migArrow} ${migLabel}</span></div>`);
+        lines.push(`<div style="font-size:10px">🛒 Avg Consumption Tier ${consLvl.toFixed(2)}</div>`);
 
         // ── Income breakdown ──────────────────────────────────────────
         const incColor = c.income_total > 0 ? "#3fb950" : c.income_total < 0 ? "#f85149" : "#8b949e";
-        lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Income (gold/tick)</div>`);
+        const econSize = c.economic_output || 0;
+        lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Economy (gold/tick)</div>`);
+        lines.push(`<div style="font-size:10px">🏦 Economy Size ₿${econSize.toFixed(1)} <span style="color:#8b949e">(gross throughput)</span></div>`);
         lines.push(`<div style="font-size:10px">Net <span style="color:${incColor}">₿${c.income_total.toFixed(2)}</span> · Per person <span style="color:${incColor}">₿${c.income_per_person.toFixed(3)}</span></div>`);
         const goodsIn = getGoodKeys();
         for (const g of goodsIn) {

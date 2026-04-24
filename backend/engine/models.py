@@ -133,6 +133,16 @@ class City(ModelMeta):
     # city-building key -> net profit this tick.
     building_profit: Dict[str, float] = field(default_factory=dict)
     employee_level_count: int = 0
+    # profession key -> total headcount across all staffed improvements +
+    # buildings. Recomputed by employment.update_city_employment and
+    # employment.reallocate_workers_by_profit.
+    professions: Dict[str, int] = field(default_factory=dict)
+    # profession key -> average wage per person in that profession.
+    profession_wages: Dict[str, float] = field(default_factory=dict)
+    # profession key -> share of this city's current profit pool.
+    profession_income_shares: Dict[str, float] = field(default_factory=dict)
+    # profession key -> slow-moving consumption level / wealth tier.
+    consumption_levels: Dict[str, float] = field(default_factory=dict)
     # Population-derived workforce snapshots (refreshed per tick).
     workforce: int = 0
     employed_pop: int = 0
@@ -148,8 +158,19 @@ class City(ModelMeta):
     income_misc: float = 0.0           # raw-gold resource cells, etc.
     income_total: float = 0.0          # net gold gained this tick
     income_per_person: float = 0.0
-    # Rolling window of income_per_person, used to smooth attractiveness.
-    income_per_person_hist: List[float] = field(default_factory=list)
+    # Gross economic activity at base prices (consumption + exports). Unlike
+    # income_total this is not netted against imports, so trade hubs score
+    # high. Intended as the headline "economy size" metric.
+    economic_output: float = 0.0
+    # Population-weighted mean of per-profession consumption tier. Used as
+    # the migration quality signal — cities where residents live on higher
+    # consumption tiers pull immigrants.
+    avg_consumption_level: float = 0.0
+    avg_consumption_level_hist: List[float] = field(default_factory=list)
+    # Demand fulfillment score (0..1). High when the city is broadly balanced.
+    market_satisfaction: float = 0.0
+    # Rolling window of market_satisfaction, used to smooth attractiveness.
+    market_satisfaction_hist: List[float] = field(default_factory=list)
 
     # ── Migration ──────────────────────────────────
     # Composite pull score (higher = immigrants want to move here). Computed
@@ -386,6 +407,9 @@ class ImprovementType(ModelMeta):
     staffable: bool
     upgradable: bool
     produces_good: Optional[str] = None
+    # Profession breakdown per staffed level; values sum to
+    # N_EMPLOYEES_PER_LEVEL. Empty for non-staffable types.
+    professions: Dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -411,6 +435,48 @@ class ImprovementEconomyProfile(ModelMeta):
     counts_as_worked_tile: bool = True
 
 
+@dataclass
+class ProfessionConsumptionProfile(ModelMeta):
+    """Slow-moving consumption tuning for a profession class.
+
+    ``income_weight`` controls how much of the city's profit pool this
+    profession captures relative to the others; ``spend_share`` controls
+    how much of that wage is assumed to be available for consumption;
+    consumption levels move slowly between ``min_level`` and ``max_level``.
+    """
+    key: str
+    income_weight: float
+    spend_share: float
+    base_level: float
+    min_level: float
+    max_level: float
+    increase_step: float
+    decrease_step: float
+    raise_threshold: float
+    lower_threshold: float
+    reference_wage: float
+
+
+@dataclass
+class ConsumptionGoodProfile(ModelMeta):
+    """Demand curve for one good as consumption rises."""
+    good: str
+    base_per_person: float
+    floor_multiplier: float
+    early_mid: float
+    early_amp: float
+    late_mid: float
+    late_amp: float
+    early_slope: float = 1.2
+    late_slope: float = 0.9
+    curve_kind: str = "sigmoid2"
+    # Optional control points for "points" curves: (consumption_level, multiplier).
+    curve_points: List[Tuple[float, float]] = field(default_factory=list)
+    # Optional named parameters for custom curve functions.
+    curve_params: Dict[str, float] = field(default_factory=dict)
+    profession_multipliers: Dict[str, float] = field(default_factory=dict)
+
+
 # ── City buildings ───────────────────────────────────────────────────────────
 
 @dataclass
@@ -427,3 +493,6 @@ class BuildingType(ModelMeta):
     cost_resources: Set[str] = field(default_factory=set)
     inputs: Dict[str, float] = field(default_factory=dict)
     outputs: Dict[str, float] = field(default_factory=dict)
+    # Profession breakdown per staffed level; values sum to
+    # N_EMPLOYEES_PER_LEVEL. Empty for non-staffable buildings.
+    professions: Dict[str, int] = field(default_factory=dict)

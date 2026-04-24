@@ -203,6 +203,48 @@ def land_bfs_path(
     return None
 
 
+def land_bfs_distance_field(
+    from_cell: int,
+    ter: list,
+    blocked: Optional[Iterable[int]] = None,
+    *,
+    frontier_budget: int = 4000,
+) -> Dict[int, int]:
+    """BFS from ``from_cell`` over walkable land; returns ``{cell: distance}``.
+
+    Shared flow-field primitive: when many armies head to the same target,
+    build this field once and let every army greedy-descend it instead of
+    running per-army A*. Pairs with priority-sorted movement (closest
+    first) to produce natural column-flow through chokepoints — the lead
+    army vacates its cell, the next army descends into it, and so on.
+
+    ``blocked`` cells (e.g. enemy armies) are treated as walls. Friendlies
+    should NOT be passed in — occupancy is resolved at step-time so the
+    field remains valid across an entire moving group. ``from_cell`` is
+    always included even if it was in ``blocked``.
+    """
+    blocked_set: Set[int] = set(blocked) if blocked else set()
+    blocked_set.discard(from_cell)
+
+    dist_map: Dict[int, int] = {from_cell: 0}
+    q: deque = deque([from_cell])
+    expanded = 0
+    while q:
+        cur = q.popleft()
+        expanded += 1
+        if expanded > frontier_budget:
+            break
+        cd = dist_map[cur]
+        for n in neighbors(cur):
+            if n in dist_map:
+                continue
+            if not _land_walkable(ter, n) or n in blocked_set:
+                continue
+            dist_map[n] = cd + 1
+            q.append(n)
+    return dist_map
+
+
 def land_astar_path(
     from_cell: int,
     to_cell: int,

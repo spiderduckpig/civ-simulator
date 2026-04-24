@@ -44,7 +44,7 @@ from .constants import (
     FRIENDLY_TERRAIN_BONUS,
     CITY_BASE_HP, CAPITAL_HP_BONUS, FORT_HP_BONUS,
 )
-from .helpers import neighbors, dist, land_astar_path
+from .helpers import neighbors, dist, land_bfs_distance_field
 from .government import fort_is_active
 from .improvements import imp_type, imp_level
 from .civ import gen_commander_name, next_army_id
@@ -194,58 +194,101 @@ def _eff_strength(army: Army) -> float:
     return army.strength * org * cmd * sup
 
 
-# ── Pathfinding ─────────────────────────────────────────────────────────────
-# A* runs fresh every tick for every moving army. We used to cache paths
-# but that broke whenever a friendly parked on a step: the cache saw the
-# same target and happily returned the same blocked path forever. Running
-# fresh A* with friendlies-as-walls each tick keeps routing honest, and
-# the Manhattan heuristic on our uniform-cost grid keeps the explored
-# frontier O(d) instead of O(d²), so the fresh-recompute is cheap.
+# ── Pathfinding (flow fields) ───────────────────────────────────────────────
+# Per-army A* with friendlies-as-walls caused chokepoint bottlenecks: when
+# many armies queued toward a single city through a narrow corridor, each
+# A* saw the friendlies ahead as permanent walls and bailed, so rear armies
+# just stopped. Fixed by switching to a shared flow-field:
+#
+#   1. For each unique walk target, build one BFS distance field outward.
+#      Enemies are walls; friendlies are NOT — occupancy is resolved at
+#      step-time instead. So the field stays valid for a whole moving column.
+#   2. Armies heading to the same target share the field (N A*s → 1 BFS).
+#   3. Sort armies by current distance-to-target ascending; closest moves
+#      first. That army vacates its cell, which becomes the next army's
+#      step destination — natural column-flow through chokepoints.
+#   4. Each army greedy-descends: step to the unoccupied neighbour with the
+#      lowest field value, up to ARMY_MOVE_RANGE. If every lower neighbour
+#      is held by a friendly who hasn't moved yet, wait — priority sort
+#      means they'll move before this army's next chance anyway.
 
-def _step_army(
-    army: Army, target_cell: int, ter: list,
+def _descend_field(
+    army: Army, field: dict[int, int],
     occupied: Set[int], blocked_enemy: Set[int],
+    friendly_by_cell: dict[int, Army],
 ) -> None:
-    """Move the army up to ARMY_MOVE_RANGE cells toward `target_cell`.
+    """Greedy descent over a shared BFS distance field.
 
-    `occupied` holds every live army cell in the war (friend + foe).
-    `blocked_enemy` is just the enemy subset (kept separate so the caller
-    can use it for adjacency scoring).
+    ``field`` is the output of ``land_bfs_distance_field`` for this army's
+    walk target (built with enemies as walls). ``occupied`` holds every
+    live army cell in the war (friend + foe) and is mutated in place as
+    the army steps — priority-sorted callers rely on this to free cells
+    for armies behind them.
     """
-    original_cell = army.cell
-    if original_cell == target_cell:
+    my_cell = army.cell
+    if my_cell not in field:
         return
-
-    # Both friendlies and enemies are walls for routing; our own cell is
-    # subtracted so the search can start. This forces A* to go AROUND
-    # parked friendlies instead of dead-ending behind them.
-    blocked = (occupied | blocked_enemy) - {original_cell}
-    # Also exclude target_cell from the wall set if it's in `occupied` —
-    # e.g. a friendly already sitting on our destination. A* will route to
-    # it; the final-landing check below will refuse to stack.
-    blocked.discard(target_cell)
-
-    path = land_astar_path(
-        original_cell, target_cell, ter, blocked,
-        frontier_budget=ARMY_PATHFIND_BUDGET,
-    )
-    if not path or len(path) < 2:
-        return
-
-    my_cell = original_cell
-    idx = 0
     steps = 0
-    while steps < ARMY_MOVE_RANGE and idx + 1 < len(path):
-        nxt = path[idx + 1]
-        # Don't stack onto any occupied cell (friend or foe).
-        if nxt in occupied and nxt != my_cell:
+    while steps < ARMY_MOVE_RANGE:
+        cur_d = field[my_cell]
+        if cur_d == 0:
             break
-        if nxt in blocked_enemy:
+        best_n = -1
+        best_d = cur_d
+        for n in neighbors(my_cell):
+            if n in occupied or n in blocked_enemy:
+                continue
+            d = field.get(n)
+            if d is None:
+                continue
+            if d < best_d:
+                best_d = d
+                best_n = n
+        if best_n >= 0:
+            occupied.discard(my_cell)
+            occupied.add(best_n)
+            friendly_by_cell.pop(my_cell, None)
+            friendly_by_cell[best_n] = army
+            my_cell = best_n
+            steps += 1
+            continue
+
+        # Frontline rotation: if blocked by a weaker/retreating friendly,
+        # allow a one-cell swap so fresh armies can move through chokepoints.
+        swap_n = -1
+        swap_d = cur_d
+        for n in neighbors(my_cell):
+            other = friendly_by_cell.get(n)
+            if other is None or other is army:
+                continue
+            d = field.get(n)
+            if d is None or d >= swap_d:
+                continue
+
+            other_org = float(getattr(other, "organization", 0.0))
+            other_retreat = getattr(other, "behavior", None) == BEHAVIOR_RETREAT
+            other_weak = other_org <= (ARMY_BROKEN_ORG + 8.0)
+            mine_ready = float(getattr(army, "organization", 0.0)) >= max(
+                ARMY_RECOVER_ORG,
+                other_org + 8.0,
+            )
+            if not (mine_ready and (other_retreat or other_weak)):
+                continue
+
+            swap_n = n
+            swap_d = d
+
+        if swap_n < 0:
             break
-        occupied.discard(my_cell)
-        occupied.add(nxt)
-        my_cell = nxt
-        idx += 1
+
+        other = friendly_by_cell.get(swap_n)
+        if other is None:
+            break
+        other.cell = my_cell
+        army.cell = swap_n
+        friendly_by_cell[my_cell] = other
+        friendly_by_cell[swap_n] = army
+        my_cell = army.cell
         steps += 1
 
     army.cell = my_cell
@@ -430,13 +473,18 @@ def _select_behavior(
     adj_blocked = (occupied | blocked_enemy) - {cur}
 
     # ── Retreat gate ─────────────────────────────────────────────────
-    # A broken army (org <= ARMY_BROKEN_ORG) limps back to the nearest
-    # friendly city/fort and can't initiate combat. It exits retreat only
-    # when it's on a safe cell AND organisation has recovered.
+    # A broken army (org <= ARMY_BROKEN_ORG) limps back toward the nearest
+    # friendly city/fort and can't initiate combat. Exit retreat as soon
+    # as the army stands on friendly territory (not just on a fort/city)
+    # with organisation recovered — otherwise, when several broken armies
+    # all target the same fort, the one parked on the cell locks the rest
+    # out: they pile up adjacent, on home soil, but keep re-selecting the
+    # blocked fort as their target forever. Being inside own territory is
+    # safe enough to stop fleeing; supply/org already regen there.
     org = army.organization
     in_retreat = (cur_b == BEHAVIOR_RETREAT)
     if org <= ARMY_BROKEN_ORG or in_retreat:
-        on_safe_ground = cur in safe_cells
+        on_safe_ground = cur in safe_cells or cur in getattr(civ, "territory", set())
         recovered = org >= ARMY_RECOVER_ORG
         if not (in_retreat and on_safe_ground and recovered):
             # Pick nearest safe retreat target; fall back to origin.
@@ -798,6 +846,8 @@ def tick_armies(
             # Enemy city cells: cheap list used for "distance to front".
             enemy_city_cells = [c.cell for c in getattr(enemy, "cities", [])]
 
+            # Pass 1: supply + behavior + pending move list (no movement yet).
+            pending: list[tuple[Army, int]] = []
             for a in armies:
                 if a.strength <= 0:
                     continue
@@ -825,16 +875,42 @@ def tick_armies(
                 a.behavior  = behavior
                 a.objective = obj
                 if obj and obj.target_cell is not None:
-                    # For city attacks, walk toward an adjacent cell; for
-                    # everything else the target_cell is already the walk goal.
-                    walk = obj.walk_cell
-                    if walk is None:
-                        walk = obj.target_cell
-                    _step_army(a, walk, ter, occupied, blocked_enemy)
+                    walk = obj.walk_cell if obj.walk_cell is not None else obj.target_cell
+                    if walk != a.cell:
+                        pending.append((a, walk))
 
-                # Refresh fortification AFTER move (the army may have
-                # landed on a fort/city this tick).
-                a.fortification, a.fort_source = _compute_fortification(a, civ, impr)
+            # Pass 2: flow-field movement. One BFS per unique walk target
+            # (shared across every army heading there); then priority-sort
+            # ascending by distance-to-target so the lead army moves first
+            # and frees its cell for whoever's behind it — column flow.
+            field_cache: dict[int, dict[int, int]] = {}
+            for _, walk in pending:
+                if walk not in field_cache:
+                    field_cache[walk] = land_bfs_distance_field(
+                        walk, ter, blocked_enemy,
+                    )
+
+            pending.sort(
+                key=lambda item: field_cache[item[1]].get(item[0].cell, 10**9),
+            )
+
+            friendly_by_cell: dict[int, Army] = {
+                a.cell: a for a in armies if getattr(a, "strength", 0) > 0
+            }
+            for a, walk in pending:
+                _descend_field(
+                    a,
+                    field_cache[walk],
+                    occupied,
+                    blocked_enemy,
+                    friendly_by_cell,
+                )
+
+            # Refresh fortification AFTER movement (armies may have landed
+            # on a fort/city this tick).
+            for a in armies:
+                if a.strength > 0:
+                    a.fortification, a.fort_source = _compute_fortification(a, civ, impr)
 
     # ── Phase 2: combat (army vs army, then army vs city) ─────────────────
     for wk, war in wars.items():

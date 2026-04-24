@@ -32,6 +32,43 @@ function resourceIcon(mapData, resourceType) {
     return FALLBACK_RESOURCE_ICON;
 }
 
+// Colorblind-friendly per-resource hues (Okabe-Ito-inspired palette where possible).
+const RESOURCE_MODE_COLORS = {
+    grain: "#009E73",
+    bread: "#E69F00",
+    lumber: "#0072B2",
+    copper_ore: "#CC79A7",
+    iron_ore: "#4E79A7",
+    stone: "#595959",
+    copper: "#D55E00",
+    iron: "#6C757D",
+    fabric: "#56B4E9",
+    clothes: "#3B4CC0",
+    paper: "#6A994E",
+    housing: "#4D908E",
+    ships: "#264653",
+    sapphires: "#1F4EAE",
+};
+
+function _hexToRgb(hex) {
+    const m = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(String(hex || ""));
+    if (!m) return { r: 127, g: 127, b: 127 };
+    return {
+        r: parseInt(m[1], 16),
+        g: parseInt(m[2], 16),
+        b: parseInt(m[3], 16),
+    };
+}
+
+function _mixTowardWhite(hex, t) {
+    const clamped = Math.max(0, Math.min(1, t));
+    const { r, g, b } = _hexToRgb(hex);
+    const rr = (255 + (r - 255) * clamped) | 0;
+    const gg = (255 + (g - 255) * clamped) | 0;
+    const bb = (255 + (b - 255) * clamped) | 0;
+    return `rgb(${rr},${gg},${bb})`;
+}
+
 // Bit-packed improvement encoding: low 5 bits = type (0-31), rest = level-1.
 const IMP_TYPE_BITS = 5;
 const IMP_TYPE_MASK = (1 << IMP_TYPE_BITS) - 1;
@@ -101,8 +138,12 @@ function _impInfo(raw, cell, rivers, ter, ownerCity, goodEff, mapData) {
         let upCost = lvl < 20 ? `(up ${15 * lvl * lvl}g)` : "(max)";
         detail = `🌾 ${grain} grain (max ${s(grainMax)}) ${upCost}`;
     } else if (type === 2) { // Mine
+        const rType = mapData?.res?.[String(cell)] ?? mapData?.res?.[cell] ?? null;
         let upCost = lvl < 5 ? `(up ${15 * lvl * 1.5}g)` : "(max)";
-        detail = `⛏ Produces Copper Ore @ ${Math.round(staffFrac * 100)}% ${upCost}`;
+        const extras = [];
+        if (rType === "sapphires") extras.push("Sapphires");
+        if (rType === "iron") extras.push("Iron Ore");
+        detail = `⛏ Produces Copper Ore${extras.length ? ` + ${extras.join(" + ")}` : ""} @ ${Math.round(staffFrac * 100)}% ${upCost}`;
     } else if (type === 4) { // Quarry
         let upCost = lvl < 5 ? `(up ${15 * lvl * 1.5}g)` : "(max)";
         detail = `🧱 Produces Stone @ ${Math.round(staffFrac * 100)}% ${upCost}`;
@@ -133,12 +174,31 @@ function _impInfo(raw, cell, rivers, ter, ownerCity, goodEff, mapData) {
 
     // Local regional efficiency for the improvement's primary good (per employee unit).
     let efficiency = null;
-    const primaryGood = primaryGoodByImprovement[type];
-    if (primaryGood && goodEff && goodEff[primaryGood]) {
-        const eff = goodEff[primaryGood][cell];
-        if (typeof eff === "number") {
-            const perEmp = maxEmp > 0 ? eff / maxEmp : 0;
-            efficiency = `🗺 Regional ${primaryGood} eff ×${eff.toFixed(2)} (${perEmp.toFixed(3)}/employee)`;
+    if (type === 2 && goodEff) {
+        const parts = [];
+        const copperEff = goodEff.copper?.[cell];
+        const sappEff = goodEff.sapphires?.[cell];
+        const ironOreEff = goodEff.iron_ore?.[cell];
+        if (typeof copperEff === "number") {
+            parts.push(`copper ×${copperEff.toFixed(2)}`);
+        }
+        if (typeof sappEff === "number") {
+            parts.push(`sapphires ×${sappEff.toFixed(2)}`);
+        }
+        if (typeof ironOreEff === "number") {
+            parts.push(`iron_ore ×${ironOreEff.toFixed(2)}`);
+        }
+        if (parts.length) {
+            efficiency = `🗺 Regional eff ${parts.join(" · ")}`;
+        }
+    } else {
+        const primaryGood = primaryGoodByImprovement[type];
+        if (primaryGood && goodEff && goodEff[primaryGood]) {
+            const eff = goodEff[primaryGood][cell];
+            if (typeof eff === "number") {
+                const perEmp = maxEmp > 0 ? eff / maxEmp : 0;
+                efficiency = `🗺 Regional ${primaryGood} eff ×${eff.toFixed(2)} (${perEmp.toFixed(3)}/employee)`;
+            }
         }
     }
     return { name, level: lvl, detail, employees, efficiency };
@@ -250,6 +310,16 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
 
     // ── Terrain fill ─────────────────────────────────────────────────────────
     const effField = (mapMode === "resource" && good_efficiency) ? good_efficiency[resourceGood] : null;
+    let effScale = 1.0;
+    if (effField && effField.length) {
+        let mx = 0.0;
+        for (let i = 0; i < effField.length; i++) {
+            const v = effField[i] || 0.0;
+            if (v > mx) mx = v;
+        }
+        effScale = Math.max(0.001, mx);
+    }
+    const resourceHue = RESOURCE_MODE_COLORS[resourceGood] || "#0072B2";
     for (let y = 0; y < H; y++) {
         for (let x = 0; x < W; x++) {
             const i   = y * W + x;
@@ -260,26 +330,14 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
             if (mapMode === "political") {
                 ctx.fillStyle = civ ? civ.color : (t <= 2 ? terrain_colors[t] : "#2a2a2a");
             } else if (mapMode === "resource" && effField) {
-                // Water stays dark; land gets a red→yellow→green heatmap on efficiency.
+                // Water stays terrain-colored; land fades from white to a
+                // single per-resource hue by concentration.
                 if (t <= 2) {
                     ctx.fillStyle = terrain_colors[t];
                 } else {
                     const e = effField[i] || 0;
-                    // normalise — biome×noise caps near ~2.0, clip [0, 1.6] → [0, 1]
-                    const n = Math.max(0, Math.min(1, e / 1.6));
-                    let r, g, b;
-                    if (n < 0.5) {
-                        const k = n / 0.5;
-                        r = (180 + k * 60) | 0;
-                        g = (30 + k * 170) | 0;
-                        b = 30;
-                    } else {
-                        const k = (n - 0.5) / 0.5;
-                        r = (240 - k * 200) | 0;
-                        g = (200 + k * 30) | 0;
-                        b = (30 + k * 40) | 0;
-                    }
-                    ctx.fillStyle = `rgb(${r},${g},${b})`;
+                    const n = Math.max(0, Math.min(1, e / effScale));
+                    ctx.fillStyle = _mixTowardWhite(resourceHue, n);
                 }
             } else {
                 ctx.fillStyle = civ
@@ -1056,6 +1114,8 @@ export function getCellInfo(mapData, state, cellIndex) {
             income_misc: city.income_misc || 0,
             income_total: city.income_total || 0,
             income_per_person: city.income_per_person || 0,
+            economic_output: city.economic_output || 0,
+            avg_consumption_level: city.avg_consumption_level || 0,
             buildings: city.buildings || {},
             building_staffing: city.building_staffing || {},
             building_profit: city.building_profit || {},

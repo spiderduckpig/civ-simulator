@@ -50,11 +50,11 @@ def downgrade_imp(raw: int) -> int:
 # Maximum level each type can reach. Farms are the main driver of food so
 # they scale further than other types.
 MAX_LEVELS = {
-    IMP.FARM:     20,
-    IMP.COTTON:   30,
-    IMP.MINE:     5,
-    IMP.QUARRY:   5,
-    IMP.LUMBER:   5,
+    IMP.FARM:     49,
+    IMP.COTTON:   100,
+    IMP.MINE:     50,
+    IMP.QUARRY:   30,
+    IMP.LUMBER:   30,
     IMP.PASTURE:  5,
     IMP.WINDMILL: 5,
     IMP.FORT:     5,
@@ -63,10 +63,9 @@ MAX_LEVELS = {
     IMP.FISHERY:  5,
 }
 
-# Types the per-city investment loop is allowed to upgrade. Lumber and
-# pasture are single-level flavour improvements right now.
+# Types the per-city investment loop is allowed to upgrade.
 UPGRADABLE_TYPES = {
-    IMP.FARM, IMP.COTTON, IMP.MINE, IMP.QUARRY, IMP.WINDMILL,
+    IMP.FARM, IMP.COTTON, IMP.MINE, IMP.QUARRY, IMP.LUMBER, IMP.WINDMILL,
     IMP.FORT, IMP.PORT, IMP.SMITHERY, IMP.FISHERY,
 }
 
@@ -219,10 +218,6 @@ def advanced_structure_for(
         ww = nearby_farms * 0.6
         if focus == FOCUS.FARMING: ww *= 1.8
         weights[IMP.WINDMILL] = ww
-
-    if focus == FOCUS.MINING:
-        # Smitheries convert ore → metal. Always an option under mining focus.
-        weights[IMP.SMITHERY] = 2.0
 
     if not weights:
         return IMP.NONE
