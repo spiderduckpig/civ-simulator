@@ -13,7 +13,7 @@ from .constants import (
 from .helpers import dist
 from .models import (
     Civ, City, Government, FortFunding, GovernmentOwnershipProfile,
-    GovernmentConstructionOrder,
+    GovernmentConstructionOrder, GovernmentFlow,
 )
 
 
@@ -21,10 +21,46 @@ GOV_CONSTRUCTION_QUEUE_LIMIT = 4
 GOV_CONSTRUCTION_REVENUE_MARGIN = 1.0
 GOV_CONSTRUCTION_SPEND_MULT = 3.0
 GOV_HOSTILE_RELATION_THRESHOLD = 0.0
+UNEMPLOYMENT_BENEFIT_BASE = 0.04
+UNEMPLOYMENT_BENEFIT_INCOME_MULT = 0.08
 
 
 def _available_net_revenue(gov: Government) -> float:
     return max(0.0, float(gov.last_tax_collected) - float(gov.last_fort_spending))
+
+
+def reset_government_flows(gov: Government) -> None:
+    if not hasattr(gov, "last_flows") or gov.last_flows is None:
+        gov.last_flows = []
+    else:
+        gov.last_flows.clear()
+    gov.last_benefit_spending = 0.0
+    gov.last_build_spending = 0.0
+    gov.last_fort_spending = 0.0
+
+
+def record_government_flow(
+    gov: Government,
+    *,
+    kind: str,
+    label: str,
+    amount: float,
+    category: str = "income",
+    city_cell: int | None = None,
+    city_name: str = "",
+    note: str = "",
+) -> None:
+    if not hasattr(gov, "last_flows") or gov.last_flows is None:
+        gov.last_flows = []
+    gov.last_flows.append(GovernmentFlow(
+        kind=kind,
+        label=label,
+        amount=float(amount),
+        category=category,
+        city_cell=city_cell,
+        city_name=city_name,
+        note=note,
+    ))
 
 
 def _fort_profile() -> GovernmentOwnershipProfile:
@@ -118,6 +154,52 @@ def collect_tax(civ: Civ) -> float:
         total += taxable
     gov.treasury += total
     gov.last_tax_collected = total
+    record_government_flow(
+        gov,
+        kind="tax",
+        label="Taxes",
+        amount=total,
+        category="income",
+        note=f"tax rate {gov.tax_rate:.2%}",
+    )
+    return total
+
+
+def pay_unemployment_benefits(civ: Civ) -> float:
+    gov = ensure_government(civ)
+    total = 0.0
+    if gov.treasury <= 0.0:
+        return 0.0
+
+    for city in getattr(civ, "cities", []):
+        unemployed = max(0, int(getattr(city, "unemployed_pop", 0) or 0))
+        if unemployed <= 0:
+            continue
+
+        per_person = max(
+            UNEMPLOYMENT_BENEFIT_BASE,
+            float(getattr(city, "income_per_person", 0.0)) * UNEMPLOYMENT_BENEFIT_INCOME_MULT,
+        )
+        benefit = min(gov.treasury, per_person * unemployed)
+        if benefit <= 0.0:
+            continue
+
+        gov.treasury -= benefit
+        total += benefit
+        city.gold += benefit
+        city.income_misc += benefit
+        record_government_flow(
+            gov,
+            kind="unemployment_benefit",
+            label="Unemployment benefits",
+            amount=benefit,
+            category="expense",
+            city_cell=city.cell,
+            city_name=city.name,
+            note=f"{unemployed} unemployed × ₿{per_person:.3f}",
+        )
+
+    gov.last_benefit_spending = total
     return total
 
 
@@ -287,6 +369,16 @@ def execute_government_construction(
 
     gov.treasury -= order.estimated_spending
     gov.last_build_spending = order.estimated_spending
+    record_government_flow(
+        gov,
+        kind="construction_spending",
+        label="Government construction",
+        amount=order.estimated_spending,
+        category="expense",
+        city_cell=host_city.cell,
+        city_name=host_city.name,
+        note=order.asset_label,
+    )
     gov.construction_queue.pop(0)
 
     from . import employment
@@ -329,6 +421,16 @@ def update_fort_funding(civ: Civ) -> None:
             spend = min(upkeep, reserve)
             reserve -= spend
             gov.last_fort_spending += spend
+            record_government_flow(
+                gov,
+                kind="fort_upkeep",
+                label="Fort upkeep",
+                amount=spend,
+                category="expense",
+                city_cell=cell,
+                city_name=host.name if host is not None else "",
+                note=f"fort {cell}",
+            )
             state.buffer = max(state.buffer, gov.fort_buffer_on)
             state.active = True
             state.last_upkeep_value = upkeep
@@ -340,6 +442,16 @@ def update_fort_funding(civ: Civ) -> None:
         spend = min(upkeep, reserve)
         reserve -= spend
         gov.last_fort_spending += spend
+        record_government_flow(
+            gov,
+            kind="fort_upkeep",
+            label="Fort upkeep",
+            amount=spend,
+            category="expense",
+            city_cell=cell,
+            city_name=host.name if host is not None else "",
+            note=f"fort {cell}",
+        )
         state.last_upkeep_value = upkeep
         continue
     gov.treasury = reserve

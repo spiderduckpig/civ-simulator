@@ -175,6 +175,7 @@ CIV_PALETTE = ["#e74c3c","#3498db","#f39c12","#2ecc71","#9b59b6","#e67e22","#1ab
 # off profession names — they're descriptive bookkeeping for the city-panel
 # breakdown. Add a key here, then reference it from registry.py / buildings.py.
 PROFESSION_META: dict[str, dict] = {
+    "unemployed": {"label": "Unemployed", "icon": "⌂", "color": "#8b949e"},
     "farmer":     {"label": "Farmer",     "icon": "🌾", "color": "#c8a000"},
     "rancher":    {"label": "Rancher",    "icon": "🐄", "color": "#77bb55"},
     "fisherman":  {"label": "Fisher",     "icon": "🐟", "color": "#4aaed8"},
@@ -187,6 +188,7 @@ PROFESSION_META: dict[str, dict] = {
     "artisan":    {"label": "Artisan",    "icon": "🎨", "color": "#9b59b6"},
     "owner":      {"label": "Owner",      "icon": "💼", "color": "#e8a44b"},
     "aristocrat": {"label": "Aristocrat", "icon": "👑", "color": "#d299ff"},
+    "merchant":   {"label": "Merchant",   "icon": "🏛", "color": "#3b8bd6"},
 }
 
 MIN_CITY_DIST = 9
@@ -229,7 +231,7 @@ CITY_HP_REGEN         = 0.6        # per tick when not under attack
 # ── City development (investment) ────────────────────────────────────────────
 # Upgrades are paid from a city's own gold stockpile + physical materials.
 INVEST_MAX_PER_TICK     = 3      # allow multiple actions if budget permits
-INVEST_PERIOD_TICKS     = 10     # city investment is slow-moving
+INVEST_PERIOD_TICKS     = 5     # city investment is slow-moving
 GOV_CONSTRUCTION_PERIOD  = 25     # slow government planning/check cycle
 FORT_REOPEN_TREASURY_MIN = 5000.0 # inactive forts stay closed until treasury recovers
 
@@ -245,6 +247,7 @@ N_EMPLOYEES_PER_LEVEL   = 10
 GOOD_SPECS: dict[str, GoodSpec] = {
     "grain": GoodSpec("grain", "Grain", "🌾", 1.0, tradable=True),
     "bread": GoodSpec("bread", "Bread", "🍞", 2.2, tradable=True),
+    "meat": GoodSpec("meat", "Meat", "🥩", 3.5, tradable=True),
     "lumber": GoodSpec("lumber", "Lumber", "🪵", 2.0, tradable=True),
     "copper_ore": GoodSpec("copper_ore", "Copper Ore", "⛏", 3.0, tradable=True),
     "iron_ore": GoodSpec("iron_ore", "Iron Ore", "⛓", 4.2, tradable=True),
@@ -257,7 +260,9 @@ GOOD_SPECS: dict[str, GoodSpec] = {
     "sapphires": GoodSpec("sapphires", "Sapphires", "🔷", 42.0, tradable=True),
     "housing": GoodSpec("housing", "Housing", "🏠", 6.0, tradable=False),
     "ships": GoodSpec("ships", "Ships", "⛵", 20.0, tradable=True),
-    "jewelry": GoodSpec("jewelry", "Jewelry", "", 50.0, tradable=True)
+    "jewelry": GoodSpec("jewelry", "Jewelry", "", 50.0, tradable=True),
+    "medical_services": GoodSpec("medical_services", "Medical Services", "⚕", 7.0, tradable=False),
+    "education": GoodSpec("education", "Education", "🎓", 9.0, tradable=False),
 }
 
 GOODS = list(GOOD_SPECS.keys())
@@ -274,6 +279,7 @@ TRADABLE_GOODS = [
 # Trade / Arbitrage constants
 TRADE_PERIOD_TICKS = 5
 TRANSPORT_COST_PER_DIST = 0.5
+TRADE_HOUSE_CAPACITY_PER_EMPLOYEE = 10.0
 
 # Expansion cap: civs stop claiming new territory once they exceed this
 # tiles-per-city ratio (until they found/capture more cities).

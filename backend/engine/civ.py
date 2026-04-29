@@ -5,10 +5,9 @@ import json
 from typing import List, Optional
 
 from .constants import (
-    W, H, N, T, IMP, CAN_FARM, CIV_PALETTE, FOCUS
+    W, H, N, T, CIV_PALETTE, FOCUS
 )
 from .helpers import neighbors, is_land, centroid, find_path, war_key, cell_on_river
-from .improvements import make_imp
 from .mapgen import cell_coastal, cell_river_mouth
 from .models import Civ, City, Road, Rivers
 
@@ -253,14 +252,14 @@ def make_civ(
         focus=random.choice([FOCUS.FARMING, FOCUS.MINING, FOCUS.DEFENSE]),
         near_river=cell_on_river(spot, rivers),
         coastal=cell_coastal(spot, ter),
+        # Capacity-era bootstrap: give capitals a small starter producer base
+        # so food/jobs exist before investment loops spin up.
+        buildings={
+            "farm": 4,
+            **({"fishery": 1} if cell_coastal(spot, ter) else {}),
+        },
         last_dmg_tick=-999,
     )
-
-    # Initial farms so the city can produce food immediately
-    if impr is not None:
-        for n in neighbors(spot):
-            if n in territory and impr[n] == IMP.NONE and ter[n] in CAN_FARM:
-                impr[n] = make_imp(IMP.FARM, 1)
 
     return Civ(
         id=cid,

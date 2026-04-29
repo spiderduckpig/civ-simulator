@@ -33,6 +33,7 @@ from engine.simulation import tick_sim
 from engine.noise import make_noise
 from engine.employment import STAFFABLE_TYPES
 from engine.regions import IMP_PRIMARY_GOOD
+from engine.capacity import PRODUCER_BUILDINGS, SHARED_CAPACITY_GROUPS
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("civitas")
@@ -117,6 +118,10 @@ def _ser_map(md: MapData) -> dict:
         "employee_per_level": N_EMPLOYEES_PER_LEVEL,
         "staffable_imp_types": sorted(int(v) for v in STAFFABLE_TYPES),
         "imp_primary_good": {str(k): v for k, v in IMP_PRIMARY_GOOD.items()},
+        "producer_buildings": PRODUCER_BUILDINGS,
+        "shared_capacity_groups": {
+            k: list(v) for k, v in SHARED_CAPACITY_GROUPS.items()
+        },
         "good_efficiency": {
             g: [round(v, 3) for v in field]
             for g, field in md.good_efficiency.items()
@@ -155,6 +160,29 @@ def _ser_civs(civs: List[Civ]) -> list:
                 "buildings":      ci.buildings,
                 "building_staffing": ci.building_staffing,
                 "building_profit": {k: round(v, 2) for k, v in ci.building_profit.items()},
+                "capacities":     {k: int(v) for k, v in (ci.capacities or {}).items()},
+                "shared_capacities": {k: int(v) for k, v in (ci.shared_capacities or {}).items()},
+                "capacity_bonuses": {
+                    k: {
+                        "slots": int((v or {}).get("slots", 0)),
+                        "mult": round(float((v or {}).get("mult", 0.0)), 4),
+                    }
+                    for k, v in (ci.capacity_bonuses or {}).items()
+                },
+                "tile_capacities": {
+                    str(cell): {k: int(v) for k, v in vals.items()}
+                    for cell, vals in (ci.tile_capacities or {}).items()
+                },
+                "tile_capacity_bonuses": {
+                    str(cell): {
+                        key: {
+                            "slots": int((b or {}).get("slots", 0)),
+                            "mult": round(float((b or {}).get("mult", 0.0)), 4),
+                        }
+                        for key, b in vals.items()
+                    }
+                    for cell, vals in (ci.tile_capacity_bonuses or {}).items()
+                },
                 "building_details": [
                     {
                         "key": key,
@@ -166,6 +194,27 @@ def _ser_civs(civs: List[Civ]) -> list:
                         "profit": round(ci.building_profit.get(key, 0.0), 2),
                     }
                     for key, b in BUILDING_TYPES.items()
+                    if int(ci.buildings.get(key, 0)) > 0
+                ] + [
+                    {
+                        "key": key,
+                        "name": meta.get("label", key),
+                        "level": int(ci.buildings.get(key, 0)),
+                        "staffed": int(ci.building_staffing.get(key, 0)),
+                        "inputs": (
+                            {meta.get("input_good"): float(meta.get("input_per_level", 0.0))}
+                            if meta.get("input_good") and float(meta.get("input_per_level", 0.0)) > 0.0
+                            else {}
+                        ),
+                        "outputs": (
+                            {meta.get("good"): float(meta.get("base_output", 0.0))}
+                            if meta.get("good")
+                            else {}
+                        ),
+                        "profit": round(ci.building_profit.get(key, 0.0), 2),
+                        "capacity": int((ci.capacities or {}).get(key, 0)),
+                    }
+                    for key, meta in PRODUCER_BUILDINGS.items()
                     if int(ci.buildings.get(key, 0)) > 0
                 ],
                 "employee_level_count": ci.employee_level_count,
@@ -186,8 +235,16 @@ def _ser_civs(civs: List[Civ]) -> list:
                 "income_total":   round(ci.income_total, 2),
                 "income_per_person": round(ci.income_per_person, 3),
                 "economic_output": round(getattr(ci, "economic_output", 0.0), 2),
+                "trade_export_volume": round(getattr(ci, "trade_export_volume", 0.0), 2),
+                "trade_export_income": round(getattr(ci, "trade_export_income", 0.0), 2),
+                "trade_capacity_required": round(getattr(ci, "trade_capacity_required", 0.0), 2),
+                "trade_capacity_provided": round(getattr(ci, "trade_capacity_provided", 0.0), 2),
                 "avg_consumption_level": round(getattr(ci, "avg_consumption_level", 0.0), 3),
                 "market_satisfaction": round(getattr(ci, "market_satisfaction", 0.0), 3),
+                "population_growth_rate": round(getattr(ci, "population_growth_rate", 0.0), 5),
+                "growth_food_contribution":   round(getattr(ci, "growth_food_contribution", 0.0), 5),
+                "growth_consumption_penalty": round(getattr(ci, "growth_consumption_penalty", 0.0), 5),
+                "growth_unemployment_penalty": round(getattr(ci, "growth_unemployment_penalty", 0.0), 5),
                 "attractiveness": round(ci.attractiveness, 3),
                 "net_migration":  round(ci.net_migration, 2),
             } for ci in c.cities],
@@ -224,6 +281,19 @@ def _ser_civs(civs: List[Civ]) -> list:
                 "last_tax_collected": round(getattr(getattr(c, "government", None), "last_tax_collected", 0.0), 2),
                 "last_build_spending": round(getattr(getattr(c, "government", None), "last_build_spending", 0.0), 2),
                 "last_fort_spending": round(getattr(getattr(c, "government", None), "last_fort_spending", 0.0), 2),
+                "last_benefit_spending": round(getattr(getattr(c, "government", None), "last_benefit_spending", 0.0), 2),
+                "last_flows": [
+                    {
+                        "kind": flow.kind,
+                        "label": flow.label,
+                        "amount": round(flow.amount, 2),
+                        "category": flow.category,
+                        "city_cell": flow.city_cell,
+                        "city_name": flow.city_name,
+                        "note": flow.note,
+                    }
+                    for flow in getattr(getattr(c, "government", None), "last_flows", [])
+                ],
                 "construction_queue": [
                     {
                         "asset_key": order.asset_key,

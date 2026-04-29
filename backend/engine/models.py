@@ -122,6 +122,11 @@ class City(ModelMeta):
     _city_gold: float = 0.0
     # Per-tick trade history for tooltips: {good: (volume, other_city_name, price)}
     last_trades: Dict[str, List[Tuple[float, str, float]]] = field(default_factory=dict)
+    # Trading house bookkeeping.
+    trade_export_volume: float = 0.0
+    trade_export_income: float = 0.0
+    trade_capacity_required: float = 0.0
+    trade_capacity_provided: float = 0.0
 
     # ── Employment ─────────────────────────────────
     # cell → how many building levels are staffed (<= building's level).
@@ -132,6 +137,15 @@ class City(ModelMeta):
     building_staffing: Dict[str, int] = field(default_factory=dict)
     # city-building key -> net profit this tick.
     building_profit: Dict[str, float] = field(default_factory=dict)
+    # producer-building key -> max supported levels from current tiles.
+    capacities: Dict[str, int] = field(default_factory=dict)
+    # shared capacity pools (e.g. farm + cotton share one agricultural pool).
+    shared_capacities: Dict[str, int] = field(default_factory=dict)
+    # producer-building key -> {slots, mult} where first N levels get +mult output.
+    capacity_bonuses: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    # Per-tile capacity and bonus breakdown for tooltips/debugging.
+    tile_capacities: Dict[int, Dict[str, int]] = field(default_factory=dict)
+    tile_capacity_bonuses: Dict[int, Dict[str, Dict[str, float]]] = field(default_factory=dict)
     employee_level_count: int = 0
     # profession key -> total headcount across all staffed improvements +
     # buildings. Recomputed by employment.update_city_employment and
@@ -210,12 +224,25 @@ class GovernmentConstructionOrder(ModelMeta):
 
 
 @dataclass
+class GovernmentFlow(ModelMeta):
+    kind: str
+    label: str
+    amount: float
+    category: str = "income"
+    city_cell: Optional[int] = None
+    city_name: str = ""
+    note: str = ""
+
+
+@dataclass
 class Government(ModelMeta):
     tax_rate: float = 0.12
     treasury: float = 0.0
     last_tax_collected: float = 0.0
     last_build_spending: float = 0.0
     last_fort_spending: float = 0.0
+    last_benefit_spending: float = 0.0
+    last_flows: List[GovernmentFlow] = field(default_factory=list)
     fort_upkeep_goods: Dict[str, float] = field(default_factory=dict)
     fort_buffer_on: float = 1.5
     fort_buffer_off: float = 0.5
@@ -441,15 +468,15 @@ class ProfessionConsumptionProfile(ModelMeta):
 
     ``income_weight`` controls how much of the city's profit pool this
     profession captures relative to the others; ``spend_share`` controls
-    how much of that wage is assumed to be available for consumption;
-    consumption levels move slowly between ``min_level`` and ``max_level``.
+    how much of that wage is assumed to be available for consumption.
+    Consumption levels are floored at ``min_level`` but otherwise grow
+    boundlessly — per-good demand curves provide the natural saturation.
     """
     key: str
     income_weight: float
     spend_share: float
     base_level: float
     min_level: float
-    max_level: float
     increase_step: float
     decrease_step: float
     raise_threshold: float
@@ -462,11 +489,13 @@ class ConsumptionGoodProfile(ModelMeta):
     """Demand curve for one good as consumption rises."""
     good: str
     base_per_person: float
-    floor_multiplier: float
-    early_mid: float
-    early_amp: float
-    late_mid: float
-    late_amp: float
+    floor_multiplier: float = 0.0
+    # Sigmoid-curve parameters — only used when ``curve_kind="sigmoid2"``
+    # or one of the staple variants. Points-based curves ignore them.
+    early_mid: float = 0.0
+    early_amp: float = 0.0
+    late_mid: float = 0.0
+    late_amp: float = 0.0
     early_slope: float = 1.2
     late_slope: float = 0.9
     curve_kind: str = "sigmoid2"

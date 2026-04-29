@@ -32,7 +32,7 @@ IMPROVEMENT_ECONOMY: dict[int, ImprovementEconomyProfile] = {
     ),
     IMP.FISHERY: ImprovementEconomyProfile(
         improvement_type=IMP.FISHERY,
-        output_good="grain",
+        output_good="meat",
         output_eff_good="grain",
         output_base=2.0,
         output_per_level=1.2,
@@ -111,7 +111,9 @@ CITY_BASE_DEMAND_PER_POP: dict[str, float] = {
     "stone": 0.01,
     "paper": 0.002,
     "housing": 0.01,
-    "jewelry": 0.0005
+    "jewelry": 0.0005,
+    "medical_services": 0.005,
+    "education": 0.003,
 }
 
 # Grain-specific minimum-demand floor, applied in simulation after
@@ -154,11 +156,10 @@ CONSUMPTION_DECREASE_MULT = 0.4
 PROFESSION_CONSUMPTION_PROFILES: dict[str, ProfessionConsumptionProfile] = {
     "unemployed": ProfessionConsumptionProfile(
         key="unemployed",
-        income_weight=0.20,
-        spend_share=0.95,
-        base_level=0.08,
+        income_weight=0.01,
+        spend_share=0.25,
+        base_level=0.00,
         min_level=0.00,
-        max_level=1.10,
         increase_step=0.01,
         decrease_step=0.04,
         raise_threshold=1.05,
@@ -171,7 +172,6 @@ PROFESSION_CONSUMPTION_PROFILES: dict[str, ProfessionConsumptionProfile] = {
         spend_share=0.58,
         base_level=0.20,
         min_level=0.00,
-        max_level=2.20,
         increase_step=0.03,
         decrease_step=0.05,
         raise_threshold=1.18,
@@ -184,7 +184,6 @@ PROFESSION_CONSUMPTION_PROFILES: dict[str, ProfessionConsumptionProfile] = {
         spend_share=0.60,
         base_level=0.22,
         min_level=0.00,
-        max_level=2.25,
         increase_step=0.03,
         decrease_step=0.05,
         raise_threshold=1.18,
@@ -197,7 +196,6 @@ PROFESSION_CONSUMPTION_PROFILES: dict[str, ProfessionConsumptionProfile] = {
         spend_share=0.60,
         base_level=0.22,
         min_level=0.00,
-        max_level=2.25,
         increase_step=0.03,
         decrease_step=0.05,
         raise_threshold=1.18,
@@ -210,7 +208,6 @@ PROFESSION_CONSUMPTION_PROFILES: dict[str, ProfessionConsumptionProfile] = {
         spend_share=0.60,
         base_level=0.22,
         min_level=0.00,
-        max_level=2.25,
         increase_step=0.03,
         decrease_step=0.05,
         raise_threshold=1.18,
@@ -223,7 +220,6 @@ PROFESSION_CONSUMPTION_PROFILES: dict[str, ProfessionConsumptionProfile] = {
         spend_share=0.64,
         base_level=0.30,
         min_level=0.05,
-        max_level=2.60,
         increase_step=0.035,
         decrease_step=0.05,
         raise_threshold=1.20,
@@ -236,7 +232,6 @@ PROFESSION_CONSUMPTION_PROFILES: dict[str, ProfessionConsumptionProfile] = {
         spend_share=0.64,
         base_level=0.30,
         min_level=0.05,
-        max_level=2.70,
         increase_step=0.035,
         decrease_step=0.05,
         raise_threshold=1.20,
@@ -249,7 +244,6 @@ PROFESSION_CONSUMPTION_PROFILES: dict[str, ProfessionConsumptionProfile] = {
         spend_share=0.72,
         base_level=0.48,
         min_level=0.10,
-        max_level=3.80,
         increase_step=0.04,
         decrease_step=0.05,
         raise_threshold=1.22,
@@ -258,11 +252,10 @@ PROFESSION_CONSUMPTION_PROFILES: dict[str, ProfessionConsumptionProfile] = {
     ),
     "owner": ProfessionConsumptionProfile(
         key="owner",
-        income_weight=1.90,
+        income_weight=2.90,
         spend_share=0.80,
         base_level=0.85,
         min_level=0.25,
-        max_level=4.60,
         increase_step=0.05,
         decrease_step=0.05,
         raise_threshold=1.24,
@@ -275,7 +268,6 @@ PROFESSION_CONSUMPTION_PROFILES: dict[str, ProfessionConsumptionProfile] = {
         spend_share=0.90,
         base_level=1.25,
         min_level=0.50,
-        max_level=5.80,
         increase_step=0.06,
         decrease_step=0.05,
         raise_threshold=1.28,
@@ -288,7 +280,6 @@ PROFESSION_CONSUMPTION_PROFILES: dict[str, ProfessionConsumptionProfile] = {
         spend_share=0.74,
         base_level=0.55,
         min_level=0.10,
-        max_level=4.20,
         increase_step=0.04,
         decrease_step=0.05,
         raise_threshold=1.22,
@@ -301,25 +292,43 @@ PROFESSION_CONSUMPTION_PROFILES: dict[str, ProfessionConsumptionProfile] = {
         spend_share=0.65,
         base_level=0.32,
         min_level=0.05,
-        max_level=2.80,
         increase_step=0.035,
         decrease_step=0.05,
         raise_threshold=1.20,
         lower_threshold=0.88,
         reference_wage=1.15,
     ),
+    "merchant": ProfessionConsumptionProfile(
+        key="merchant",
+        income_weight=1.28,
+        spend_share=0.70,
+        base_level=0.42,
+        min_level=0.08,
+        increase_step=0.04,
+        decrease_step=0.05,
+        raise_threshold=1.20,
+        lower_threshold=0.90,
+        reference_wage=1.25,
+    ),
 }
 
+# All sigmoid-based curve profiles store early_mid / late_mid as fractions of
+# CONSUMPTION_CURVE_LEVEL_MAX (0.0 = bottom, 1.0 = top of sampled range) and
+# early_slope / late_slope in normalized units (slope × old_max). The curve
+# functions apply _normalized_level() before passing to the sigmoid, so the
+# shape stays identical regardless of what CONSUMPTION_CURVE_LEVEL_MAX is set
+# to. Points-based and code-override curves are exempt — they define their own
+# coordinate systems.
 DEFAULT_CONSUMPTION_GOOD_PROFILE = ConsumptionGoodProfile(
     good="__default__",
     base_per_person=0.0008,
     floor_multiplier=0.05,
-    early_mid=0.9,
+    early_mid=0.150,
     early_amp=0.10,
-    late_mid=2.5,
+    late_mid=0.417,
     late_amp=0.10,
-    early_slope=1.3,
-    late_slope=1.0,
+    early_slope=7.8,
+    late_slope=6.0,
     profession_multipliers={
         "unemployed": 0.70,
         "farmer": 0.95,
@@ -330,7 +339,9 @@ DEFAULT_CONSUMPTION_GOOD_PROFILE = ConsumptionGoodProfile(
         "worker": 1.0,
         "artisan": 1.1,
         "owner": 1.25,
+        "merchant": 1.1,
         "aristocrat": 1.45,
+        "professional": 1.1,
         "smith": 1.15,
         "sailor": 1.0,
     },
@@ -348,76 +359,95 @@ _INDUSTRIAL_LUXURY_MULTIPLIERS = {
     "worker": 0.1,
     "artisan": 0.3,
     "owner": 1.2,
+    "merchant": 0.2,
     "aristocrat": 2.5,
+    "professional": 0.1,
     "smith": 0.5,
     "sailor": 0.1,
 }
 
 
+# Midpoints are normalized fractions [0, 1] of CONSUMPTION_CURVE_LEVEL_MAX.
+# Slopes are in normalized units (multiply by max to get raw steepness).
+# Code-override goods (grain, bread) ignore these params for their shape
+# but keep them for reference; _grain_curve_code / _bread_curve_code use
+# floor_multiplier / early_amp / late_amp directly.
 GOOD_CONSUMPTION_PROFILES: dict[str, ConsumptionGoodProfile] = {
     "grain": ConsumptionGoodProfile(
         good="grain",
-        base_per_person=0.08,
+        base_per_person=0.1,
         floor_multiplier=0.03,
-        early_mid=-0.2,
+        early_mid=-0.033,
         early_amp=0.95,
-        late_mid=1.25,
+        late_mid=0.208,
         late_amp=0.45,
-        early_slope=1.5,
-        late_slope=0.95,
+        early_slope=9.0,
+        late_slope=5.7,
         curve_kind="staple_shift",
         curve_params={
             # Rich societies substitute away from raw grain.
             "decline_amp": 1.65,
-            "decline_mid": 2.35,
-            "decline_slope": 1.55,
+            "decline_mid": 0.392,    # normalized: was 2.35 / 6
+            "decline_slope": 9.3,    # normalized: was 1.55 * 6
             "decline_power": 1.0,
         },
     ),
     "bread": ConsumptionGoodProfile(
         good="bread",
-        base_per_person=0.00,
-        floor_multiplier=0.03,
-        early_mid=0.2,
+        base_per_person=0.1,
+        floor_multiplier=0.005,
+        early_mid=0.033,
         early_amp=0.28,
-        late_mid=1.4,
+        late_mid=0.233,
         late_amp=2.05,
-        early_slope=1.4,
-        late_slope=1.15,
+        early_slope=8.4,
+        late_slope=6.9,
+        curve_kind="sigmoid2",
+    ),
+    "meat": ConsumptionGoodProfile(
+        good="meat",
+        base_per_person=0.1,
+        floor_multiplier=0.01,
+        early_mid=0.167,
+        early_amp=1.0,
+        late_mid=0.417,
+        late_amp=2.0,
+        early_slope=36.0,
+        late_slope=9.0,
         curve_kind="sigmoid2",
     ),
     "lumber": ConsumptionGoodProfile(
         good="lumber",
         base_per_person=0.012,
         floor_multiplier=0.18,
-        early_mid=0.1,
+        early_mid=0.017,
         early_amp=0.22,
-        late_mid=1.8,
+        late_mid=0.300,
         late_amp=0.18,
-        early_slope=1.2,
-        late_slope=1.0,
+        early_slope=7.2,
+        late_slope=6.0,
     ),
     "stone": ConsumptionGoodProfile(
         good="stone",
         base_per_person=0.010,
         floor_multiplier=0.16,
-        early_mid=0.2,
+        early_mid=0.033,
         early_amp=0.20,
-        late_mid=1.8,
+        late_mid=0.300,
         late_amp=0.15,
-        early_slope=1.2,
-        late_slope=1.0,
+        early_slope=7.2,
+        late_slope=6.0,
     ),
     "fabric": ConsumptionGoodProfile(
         good="fabric",
-        base_per_person=0.002,
+        base_per_person=0.008,
         floor_multiplier=0.05,
-        early_mid=0.8,
+        early_mid=0.133,
         early_amp=0.20,
-        late_mid=2.4,
+        late_mid=0.400,
         late_amp=0.55,
-        early_slope=1.3,
-        late_slope=1.2,
+        early_slope=7.8,
+        late_slope=7.2,
         profession_multipliers={
             "unemployed": 0.40,
             "farmer": 0.8,
@@ -428,21 +458,23 @@ GOOD_CONSUMPTION_PROFILES: dict[str, ConsumptionGoodProfile] = {
             "worker": 0.95,
             "artisan": 1.15,
             "owner": 1.45,
-            "aristocrat": 1.70,
+            "merchant": 1.70,
+            "aristocrat": 1.10,
+            "professional": 1.00,
             "smith": 1.20,
             "sailor": 1.0,
         },
     ),
     "clothes": ConsumptionGoodProfile(
         good="clothes",
-        base_per_person=0.004,
+        base_per_person=0.03,
         floor_multiplier=0.03,
-        early_mid=1.0,
+        early_mid=0.167,
         early_amp=0.22,
-        late_mid=2.8,
+        late_mid=0.467,
         late_amp=0.95,
-        early_slope=1.3,
-        late_slope=1.1,
+        early_slope=7.8,
+        late_slope=6.6,
         profession_multipliers={
             "unemployed": 0.28,
             "farmer": 0.85,
@@ -453,7 +485,9 @@ GOOD_CONSUMPTION_PROFILES: dict[str, ConsumptionGoodProfile] = {
             "worker": 1.0,
             "artisan": 1.20,
             "owner": 1.65,
+            "merchant": 1.70,
             "aristocrat": 2.10,
+            "professional": 1.00,
             "smith": 1.30,
             "sailor": 1.05,
         },
@@ -462,12 +496,12 @@ GOOD_CONSUMPTION_PROFILES: dict[str, ConsumptionGoodProfile] = {
         good="paper",
         base_per_person=0.0015,
         floor_multiplier=0.02,
-        early_mid=1.2,
+        early_mid=0.200,
         early_amp=0.12,
-        late_mid=3.0,
+        late_mid=0.500,
         late_amp=0.75,
-        early_slope=1.2,
-        late_slope=1.0,
+        early_slope=7.2,
+        late_slope=6.0,
         profession_multipliers={
             "unemployed": 0.20,
             "farmer": 0.75,
@@ -478,7 +512,9 @@ GOOD_CONSUMPTION_PROFILES: dict[str, ConsumptionGoodProfile] = {
             "worker": 1.0,
             "artisan": 1.20,
             "owner": 1.70,
+            "merchant": 1.70,
             "aristocrat": 2.30,
+            "professional": 3.00,
             "smith": 1.35,
             "sailor": 1.0,
         },
@@ -487,12 +523,12 @@ GOOD_CONSUMPTION_PROFILES: dict[str, ConsumptionGoodProfile] = {
         good="jewelry",
         base_per_person=0.0002,
         floor_multiplier=0.004,
-        early_mid=2.4,
+        early_mid=0.80,
         early_amp=0.08,
-        late_mid=4.0,
-        late_amp=0.95,
-        early_slope=1.0,
-        late_slope=0.9,
+        late_mid=0.667,
+        late_amp=1.0,
+        early_slope=6.0,
+        late_slope=5.4,
         profession_multipliers={
             "unemployed": 0.05,
             "farmer": 0.4,
@@ -503,7 +539,9 @@ GOOD_CONSUMPTION_PROFILES: dict[str, ConsumptionGoodProfile] = {
             "worker": 0.7,
             "artisan": 1.0,
             "owner": 2.0,
+            "merchant": 1.70,
             "aristocrat": 3.5,
+            "professional": 1.20,
             "smith": 1.1,
             "sailor": 0.75,
         },
@@ -511,80 +549,131 @@ GOOD_CONSUMPTION_PROFILES: dict[str, ConsumptionGoodProfile] = {
     "housing": ConsumptionGoodProfile(
         good="housing",
         base_per_person=0.010,
-        floor_multiplier=0.35,
-        early_mid=0.2,
+        floor_multiplier=0.25,
+        curve_kind="poly",
+        curve_params={"coeffs": [0, 0.05, 0.35, 0.15, 0.03, 0.015, 0.008]},
+    ),
+    # Medical services: ~0 demand below consumption ~1.0, then steadily rises.
+    "medical_services": ConsumptionGoodProfile(
+        good="medical_services",
+        base_per_person=0.008,
+        floor_multiplier=0.0,
+        early_mid=0.167,
         early_amp=0.35,
-        late_mid=1.8,
-        late_amp=0.45,
-        early_slope=1.3,
-        late_slope=1.0,
+        late_mid=0.467,
+        late_amp=0.55,
+        early_slope=9.6,
+        late_slope=6.6,
+        profession_multipliers={
+            "unemployed": 0.30,
+            "farmer": 0.80,
+            "rancher": 0.80,
+            "fisherman": 0.80,
+            "lumberjack": 0.80,
+            "miner": 1.20,
+            "worker": 1.00,
+            "artisan": 1.20,
+            "owner": 1.60,
+            "merchant": 1.00,
+            "aristocrat": 2.20,
+            "professional": 1.00,
+            "smith": 1.20,
+            "sailor": 0.95,
+        },
+    ),
+    # Education: ~0 demand below consumption ~1.5, then ramps with affluence.
+    "education": ConsumptionGoodProfile(
+        good="education",
+        base_per_person=0.01,
+        floor_multiplier=0.0,
+        early_mid=0.250,
+        early_amp=0.25,
+        late_mid=0.533,
+        late_amp=0.85,
+        early_slope=9.6,
+        late_slope=6.6,
+        profession_multipliers={
+            "unemployed": 0.15,
+            "farmer": 0.55,
+            "rancher": 0.55,
+            "fisherman": 0.55,
+            "lumberjack": 0.55,
+            "miner": 0.75,
+            "worker": 0.90,
+            "artisan": 2.50,
+            "owner": 3.50,
+            "merchant": 3.00,
+            "aristocrat": 2.60,
+            "professional": 3.50,
+            "smith": 1.40,
+            "sailor": 0.90,
+        },
     ),
     # ── Industrial / raw luxury goods ─────────────────────────────────────
     # Ores, metals, ships, and sapphires aren't consumer staples — their
     # demand comes from production chains (smitheries consume ore, etc.).
     # Population-level consumption is pinned to zero until consumption_level
-    # approaches the top of the scale (CONSUMPTION_CURVE_LEVEL_MAX = 6.0),
-    # where they become collector/display goods for the ultra-wealthy.
-    # floor_multiplier=0 and early_amp=0 keep the curve at zero; only the
-    # late sigmoid (centered at 5.0+) ever produces nonzero demand.
+    # approaches the top of the scale, where they become collector/display
+    # goods for the ultra-wealthy. early_amp=0 keeps the curve at zero; only
+    # the late sigmoid (centered at ~83–88% of max) ever produces nonzero demand.
     "copper_ore": ConsumptionGoodProfile(
         good="copper_ore",
         base_per_person=0.002,
         floor_multiplier=0.0,
-        early_mid=6.0,
+        early_mid=1.667,
         early_amp=0.0,
-        late_mid=5.0,
+        late_mid=0.833,
         late_amp=0.40,
-        early_slope=1.0,
-        late_slope=3.0,
+        early_slope=6.0,
+        late_slope=18.0,
         profession_multipliers=_INDUSTRIAL_LUXURY_MULTIPLIERS,
     ),
     "iron_ore": ConsumptionGoodProfile(
         good="iron_ore",
         base_per_person=0.0015,
         floor_multiplier=0.0,
-        early_mid=6.0,
+        early_mid=1.000,
         early_amp=0.0,
-        late_mid=5.1,
+        late_mid=0.850,
         late_amp=0.40,
-        early_slope=1.0,
-        late_slope=3.0,
+        early_slope=6.0,
+        late_slope=18.0,
         profession_multipliers=_INDUSTRIAL_LUXURY_MULTIPLIERS,
     ),
     "copper": ConsumptionGoodProfile(
         good="copper",
         base_per_person=0.0015,
         floor_multiplier=0.0,
-        early_mid=6.0,
+        early_mid=1.000,
         early_amp=0.0,
-        late_mid=5.0,
+        late_mid=0.833,
         late_amp=0.50,
-        early_slope=1.0,
-        late_slope=3.0,
+        early_slope=6.0,
+        late_slope=18.0,
         profession_multipliers=_INDUSTRIAL_LUXURY_MULTIPLIERS,
     ),
     "iron": ConsumptionGoodProfile(
         good="iron",
         base_per_person=0.0010,
         floor_multiplier=0.0,
-        early_mid=6.0,
+        early_mid=1.000,
         early_amp=0.0,
-        late_mid=5.1,
+        late_mid=0.850,
         late_amp=0.50,
-        early_slope=1.0,
-        late_slope=3.0,
+        early_slope=6.0,
+        late_slope=18.0,
         profession_multipliers=_INDUSTRIAL_LUXURY_MULTIPLIERS,
     ),
     "ships": ConsumptionGoodProfile(
         good="ships",
         base_per_person=0.0005,
         floor_multiplier=0.0,
-        early_mid=6.0,
+        early_mid=1.000,
         early_amp=0.0,
-        late_mid=5.2,
+        late_mid=0.867,
         late_amp=0.60,
-        early_slope=1.0,
-        late_slope=3.0,
+        early_slope=6.0,
+        late_slope=18.0,
         profession_multipliers={
             "unemployed": 0.0,
             "farmer": 0.0,
@@ -596,6 +685,7 @@ GOOD_CONSUMPTION_PROFILES: dict[str, ConsumptionGoodProfile] = {
             "artisan": 0.3,
             "owner": 1.5,
             "aristocrat": 3.0,
+            "professional": 1.00,
             "smith": 0.2,
             "sailor": 1.0,
         },
@@ -604,12 +694,12 @@ GOOD_CONSUMPTION_PROFILES: dict[str, ConsumptionGoodProfile] = {
         good="sapphires",
         base_per_person=0.00015,
         floor_multiplier=0.0,
-        early_mid=6.0,
+        early_mid=1.000,
         early_amp=0.0,
-        late_mid=5.3,
+        late_mid=0.883,
         late_amp=0.70,
-        early_slope=1.0,
-        late_slope=3.5,
+        early_slope=6.0,
+        late_slope=21.0,
         profession_multipliers={
             "unemployed": 0.0,
             "farmer": 0.0,
@@ -621,6 +711,7 @@ GOOD_CONSUMPTION_PROFILES: dict[str, ConsumptionGoodProfile] = {
             "artisan": 0.5,
             "owner": 2.0,
             "aristocrat": 4.0,
+            "professional": 1.00,
             "smith": 0.5,
             "sailor": 0.2,
         },
@@ -632,18 +723,23 @@ def _sigmoid(x: float, mid: float, slope: float) -> float:
     return 1.0 / (1.0 + math.exp(-slope * (x - mid)))
 
 
+# Sigmoid-based curves operate in normalized space u ∈ [0, 1] so that
+# changing CONSUMPTION_CURVE_LEVEL_MAX automatically rescales the shape.
+# Profile midpoints are fractions of max; profile slopes are in normalized units.
+
 def _curve_sigmoid2(profile: ConsumptionGoodProfile, consumption_level: float) -> float:
+    u = _normalized_level(consumption_level)
     return (
         profile.floor_multiplier
-        + profile.early_amp * _sigmoid(consumption_level, profile.early_mid, profile.early_slope)
-        + profile.late_amp * _sigmoid(consumption_level, profile.late_mid, profile.late_slope)
+        + profile.early_amp * _sigmoid(u, profile.early_mid, profile.early_slope)
+        + profile.late_amp * _sigmoid(u, profile.late_mid, profile.late_slope)
     )
 
 
 def _curve_staple(profile: ConsumptionGoodProfile, consumption_level: float) -> float:
-    # Staples rise early with welfare, then flatten.
-    early = _sigmoid(consumption_level, profile.early_mid, profile.early_slope)
-    late = _sigmoid(consumption_level, profile.late_mid, profile.late_slope)
+    u = _normalized_level(consumption_level)
+    early = _sigmoid(u, profile.early_mid, profile.early_slope)
+    late = _sigmoid(u, profile.late_mid, profile.late_slope)
     return profile.floor_multiplier + profile.early_amp * (early ** 0.7) + profile.late_amp * late
 
 
@@ -654,23 +750,38 @@ def _curve_param(profile: ConsumptionGoodProfile, key: str, default: float) -> f
 
 def _curve_staple_shift(profile: ConsumptionGoodProfile, consumption_level: float) -> float:
     """Staple consumption that can peak and then decline at high wealth."""
+    u = _normalized_level(consumption_level)
     base = _curve_staple(profile, consumption_level)
     decline_amp = _curve_param(profile, "decline_amp", 0.0)
-    decline_mid = _curve_param(profile, "decline_mid", profile.late_mid + 1.2)
-    decline_slope = _curve_param(profile, "decline_slope", 1.2)
+    decline_mid = _curve_param(profile, "decline_mid", profile.late_mid + 0.2)
+    decline_slope = _curve_param(profile, "decline_slope", 7.2)
     decline_power = _curve_param(profile, "decline_power", 1.0)
-    decline = decline_amp * (_sigmoid(consumption_level, decline_mid, decline_slope) ** max(0.1, decline_power))
+    decline = decline_amp * (_sigmoid(u, decline_mid, decline_slope) ** max(0.1, decline_power))
     return max(0.0, base - decline)
 
 
 def _curve_points(profile: ConsumptionGoodProfile, consumption_level: float) -> float:
+    """Piecewise-linear multiplier from ``profile.curve_points``.
+
+    Below the first point: clamped to that point's value (no negative
+    extrapolation — at zero consumption you spend the floor amount).
+
+    Above the last point: extrapolated using the slope of the *last
+    segment* so the curve keeps growing instead of plateauing. This is
+    the mechanism that lets late-game development keep absorbing labor.
+    """
     pts = profile.curve_points
     if not pts:
         return _curve_sigmoid2(profile, consumption_level)
     if consumption_level <= pts[0][0]:
         return pts[0][1]
     if consumption_level >= pts[-1][0]:
-        return pts[-1][1]
+        if len(pts) < 2:
+            return pts[-1][1]
+        x0, y0 = pts[-2]
+        x1, y1 = pts[-1]
+        slope = (y1 - y0) / max(1e-9, x1 - x0)
+        return y1 + slope * (consumption_level - x1)
     for i in range(1, len(pts)):
         x0, y0 = pts[i - 1]
         x1, y1 = pts[i]
@@ -681,17 +792,67 @@ def _curve_points(profile: ConsumptionGoodProfile, consumption_level: float) -> 
     return pts[-1][1]
 
 
+def _curve_poly(profile: ConsumptionGoodProfile, consumption_level: float) -> float:
+    """Polynomial curve in normalized space.
+
+    Coefficients in ``curve_params["coeffs"]`` = [a0, a1, a2, ...].
+    Result = floor_multiplier + a0 + a1·u + a2·u² + ...  where u = level/MAX.
+    """
+    params = getattr(profile, "curve_params", None) or {}
+    coeffs = params.get("coeffs") or []
+    if not coeffs:
+        return profile.floor_multiplier
+    u = _normalized_level(consumption_level)
+    total = sum(float(a) * (u ** i) for i, a in enumerate(coeffs))
+    return max(0.0, profile.floor_multiplier + total)
+
+
 _GOOD_CURVE_FUNCTIONS: dict[str, Callable[[ConsumptionGoodProfile, float], float]] = {
     "sigmoid2": _curve_sigmoid2,
     "staple": _curve_staple,
     "staple_shift": _curve_staple_shift,
     "points": _curve_points,
+    "poly": _curve_poly,
 }
 
 
+def points_profile(
+    good: str,
+    points: list[tuple[float, float]],
+    *,
+    base_per_person: float,
+    floor_multiplier: float = 0.0,
+    profession_multipliers: dict[str, float] | None = None,
+) -> ConsumptionGoodProfile:
+    """Define a good's demand curve as a list of ``(level, multiplier)`` pairs.
+
+    Linear interpolation between consecutive points; the last segment's
+    slope continues past the final point so the curve never plateaus —
+    push the slope steep at the end if you want late-game consumption to
+    keep absorbing labor as cities develop.
+
+    Example::
+
+        points_profile("luxury_widgets",
+                       [(0, 0), (3, 5), (5, 7), (8, 100)],
+                       base_per_person=0.001)
+
+    Below the first point the multiplier is clamped to that point's value;
+    above the last point the slope of the last segment continues forever.
+    """
+    return ConsumptionGoodProfile(
+        good=good,
+        base_per_person=base_per_person,
+        floor_multiplier=floor_multiplier,
+        curve_kind="points",
+        curve_points=[(float(x), float(y)) for x, y in points],
+        profession_multipliers=dict(profession_multipliers or {}),
+    )
+
+
 CONSUMPTION_CURVE_LEVEL_MIN = 0.0
-CONSUMPTION_CURVE_LEVEL_MAX = 6.0
-CONSUMPTION_CURVE_SAMPLES = 241
+CONSUMPTION_CURVE_LEVEL_MAX = 25.0
+CONSUMPTION_CURVE_SAMPLES = 441
 
 
 def _normalized_level(consumption_level: float) -> float:
@@ -785,9 +946,17 @@ def good_consumption_curve(good: str, consumption_level: float) -> float:
     x = float(consumption_level)
     if x <= CONSUMPTION_CURVE_LEVEL_MIN:
         return table[0]
-    if x >= CONSUMPTION_CURVE_LEVEL_MAX:
-        return table[-1]
     span = CONSUMPTION_CURVE_LEVEL_MAX - CONSUMPTION_CURVE_LEVEL_MIN
+    if x >= CONSUMPTION_CURVE_LEVEL_MAX:
+        # Extrapolate above the sampled domain using the slope of the last
+        # two table samples. Curves that genuinely level off (sigmoids) keep
+        # near-flat behavior; points-based curves with a steep last segment
+        # keep growing.
+        if len(table) < 2:
+            return table[-1]
+        step = span / (len(table) - 1)
+        slope = (table[-1] - table[-2]) / max(1e-9, step)
+        return max(0.0, table[-1] + slope * (x - CONSUMPTION_CURVE_LEVEL_MAX))
     pos = (x - CONSUMPTION_CURVE_LEVEL_MIN) * (len(table) - 1) / max(1e-9, span)
     i0 = int(pos)
     i1 = min(len(table) - 1, i0 + 1)
@@ -817,9 +986,13 @@ def profession_consumption_cost(
 SUBSTITUTE_GROUPS: tuple[dict[str, object], ...] = (
     {
         "base_good": "grain",
+        # Static base preferences. The simulation scales these by each
+        # member good's own consumption-level curve, so the effective split
+        # shifts toward bread/meat as a city's wealth rises.
         "members": {
             "grain": 1.0,
             "bread": 1.8,
+            "meat": 2.0,
         },
     },
 )

@@ -14,15 +14,17 @@ biased by the city's current focus.
 
 from __future__ import annotations
 
+import math
 import random
 from typing import Callable
 
-from .constants import N, IMP, FOCUS, N_EMPLOYEES_PER_LEVEL, BASE_PRICES
+from .constants import N, IMP, FOCUS, N_EMPLOYEES_PER_LEVEL, BASE_PRICES, TRADE_HOUSE_CAPACITY_PER_EMPLOYEE
 from .buildings import BUILDING_TYPES
 from .improvements import imp_type, imp_level
 from .helpers import cell_on_river
 from .mapgen import cell_coastal
 from .registry import IMPROVEMENTS
+from .capacity import PRODUCER_BUILDINGS
 from .economy_profiles import (
     PROFESSION_CONSUMPTION_PROFILES,
     PROFESSION_WAGE_POOL_SHARE,
@@ -80,9 +82,83 @@ def _employable_cells(city, impr: list) -> list[int]:
     return out
 
 
+def _staffable_building_keys(city) -> list[str]:
+    out: list[str] = []
+    blevels = getattr(city, "buildings", None) or {}
+    for key, lvl in blevels.items():
+        if int(lvl) <= 0:
+            continue
+        if key in PRODUCER_BUILDINGS:
+            out.append(key)
+            continue
+        b = BUILDING_TYPES.get(key)
+        if b is not None and b.staffable:
+            out.append(key)
+    return out
+
+
+def _building_focus_weight(key: str, focus: int) -> float:
+    prod = PRODUCER_BUILDINGS.get(key)
+    if prod is not None:
+        fk = str(prod.get("focus", ""))
+        if focus == FOCUS.FARMING and fk == "FARM":
+            return 4.0
+        if focus == FOCUS.MINING and fk in ("MINE", "QUARRY"): 
+            return 4.0
+        if focus == FOCUS.TRADE and fk == "TRADE":
+            return 4.0
+        if focus == FOCUS.DEFENSE and fk in ("FARM", "MINE"):
+            return 2.5
+        return 1.0
+
+    # Generic city buildings: rough buckets from key names.
+    key_l = key.lower()
+    if focus == FOCUS.FARMING and ("grain" in key_l or "mill" in key_l or "housing" in key_l):
+        return 2.2
+    if focus == FOCUS.MINING and ("foundry" in key_l or "smith" in key_l):
+        return 2.2
+    if focus == FOCUS.TRADE and ("ship" in key_l or "tailor" in key_l or "factory" in key_l or "trade" in key_l or "trading" in key_l or "merchant" in key_l):
+        return 2.0
+    return 1.0
+
+
+def _trade_house_target_staff(city) -> int:
+    lvl = int((getattr(city, "buildings", None) or {}).get("trading_house", 0))
+    if lvl <= 0:
+        return 0
+    volume = float(getattr(city, "trade_export_volume", 0.0) or 0.0)
+    capacity = float(getattr(city, "trade_capacity_provided", 0.0) or 0.0)
+
+    if volume <= 0.0:
+        # No measured trade yet — staff a small bootstrap crew so the city
+        # can demonstrate it can export. Without this, trade_export_volume
+        # stays at 0 forever, since trade capacity is itself gated on staff.
+        used_capacity = float(getattr(city, "trade_potential", 0.0) or 0.0)
+        if used_capacity <= 0.0:
+            used_capacity = float(getattr(city, "population", 0.0) or 0.0) * 0.15 + 4.0
+    elif capacity > 0.0:
+        # Volume is implicitly capped by current capacity. Hysteresis on the
+        # saturation ratio decides whether to grow, hold, or shrink:
+        #   ≥ 0.90 → saturated, leave one worker of headroom so unmet
+        #            export demand can show up next tick
+        #   ≥ 0.45 → comfortable load, keep the current crew
+        #   < 0.45 → genuine slack, fall back to volume
+        sat_ratio = volume / capacity
+        if sat_ratio >= 0.90:
+            used_capacity = volume + TRADE_HOUSE_CAPACITY_PER_EMPLOYEE
+        elif sat_ratio >= 0.45:
+            used_capacity = capacity
+        else:
+            used_capacity = volume
+    else:
+        used_capacity = volume
+
+    return min(lvl, int(math.ceil(used_capacity / TRADE_HOUSE_CAPACITY_PER_EMPLOYEE)))
+
+
 def _weighted_pick(
-    items: list[tuple[int, float]], rand: Callable[[], float],
-) -> int | None:
+    items: list[tuple[object, float]], rand: Callable[[], float],
+) -> object | None:
     total = sum(w for _, w in items)
     if total <= 0:
         return None
@@ -98,61 +174,50 @@ def _weighted_pick(
 def _add_staff_level(
     city, impr: list, rand: Callable[[], float],
 ) -> bool:
-    staffing = city.staffing
+    bstaff = city.building_staffing
+    blevels = city.buildings
     candidates: list[tuple[int, float]] = []
-    for cell in _employable_cells(city, impr):
-        lvl = imp_level(impr[cell])
-        cur = staffing.get(cell, 0)
+    for key in _staffable_building_keys(city):
+        lvl = int(blevels.get(key, 0))
+        cur = int(bstaff.get(key, 0))
         if cur >= lvl:
-            continue  # already maxed
-        candidates.append((cell, _focus_weight(imp_type(impr[cell]), city.focus)))
+            continue
+        if key == "trading_house" and cur >= _trade_house_target_staff(city):
+            continue
+        candidates.append((key, _building_focus_weight(key, city.focus)))
     pick = _weighted_pick(candidates, rand)
     if pick is None:
         return False
-    staffing[pick] = staffing.get(pick, 0) + 1
+    bstaff[pick] = int(bstaff.get(pick, 0)) + 1
     return True
 
 
 def _remove_staff_level(
     city, impr: list, rand: Callable[[], float],
 ) -> bool:
-    staffing = city.staffing
-    if not staffing:
+    bstaff = city.building_staffing
+    if not bstaff:
         return False
-    candidates: list[tuple[int, float]] = []
-    for cell in _employable_cells(city, impr):
-        cur = staffing.get(cell, 0)
+    candidates: list[tuple[str, float]] = []
+    for key in _staffable_building_keys(city):
+        cur = int(bstaff.get(key, 0))
         if cur <= 0:
             continue
-        # Invert focus weight: fire non-focus workers first.
-        fw = _focus_weight(imp_type(impr[cell]), city.focus)
-        candidates.append((cell, 1.0 / fw))
+        fw = _building_focus_weight(key, city.focus)
+        candidates.append((key, 1.0 / max(0.1, fw)))
     pick = _weighted_pick(candidates, rand)
     if pick is None:
         return False
-    staffing[pick] -= 1
-    if staffing[pick] <= 0:
-        staffing.pop(pick, None)
+    bstaff[pick] = int(bstaff.get(pick, 0)) - 1
+    if int(bstaff.get(pick, 0)) <= 0:
+        bstaff.pop(pick, None)
     return True
 
 
 def _cleanup_staffing(city, impr: list) -> None:
     """Drop entries for cells whose improvement was removed/downgraded."""
-    staffing = city.staffing
-    tiles_set = set(city.tiles)
-    for cell in list(staffing.keys()):
-        if cell not in tiles_set or not (0 <= cell < N):
-            staffing.pop(cell, None)
-            continue
-        raw = impr[cell]
-        if not raw or imp_type(raw) not in STAFFABLE_TYPES:
-            staffing.pop(cell, None)
-            continue
-        lvl = imp_level(raw)
-        if staffing[cell] > lvl:
-            staffing[cell] = lvl
-        if staffing[cell] <= 0:
-            staffing.pop(cell, None)
+    # Tile-based staffing is deprecated in the fungible capacity model.
+    city.staffing = {}
 
     # Keep building staffing in bounds as city-building levels change.
     if not hasattr(city, "building_staffing") or city.building_staffing is None:
@@ -172,22 +237,17 @@ def _cleanup_staffing(city, impr: list) -> None:
 
 def _vacant_producer_levels(city, impr: list) -> dict[int, int]:
     """Cache how many staffed producer levels are still vacant by type."""
-    staffing = getattr(city, "staffing", None) or {}
-    vacant: dict[int, int] = {}
-    for cell in getattr(city, "tiles", []):
-        if not (0 <= cell < N):
+    blevels = getattr(city, "buildings", None) or {}
+    bstaff = getattr(city, "building_staffing", None) or {}
+    vacant: dict[str, int] = {}
+    for key in PRODUCER_BUILDINGS.keys():
+        lvl = int(blevels.get(key, 0))
+        if lvl <= 0:
             continue
-        raw = impr[cell]
-        if not raw:
-            continue
-        it = imp_type(raw)
-        if it not in DIRECT_PRODUCER_TYPES:
-            continue
-        lvl = imp_level(raw)
-        staffed = int(staffing.get(cell, 0))
+        staffed = int(bstaff.get(key, 0))
         if staffed >= lvl:
             continue
-        vacant[it] = vacant.get(it, 0) + (lvl - staffed)
+        vacant[key] = lvl - staffed
     return vacant
 
 
@@ -209,6 +269,12 @@ def update_city_employment(
 
     _cleanup_staffing(city, impr)
 
+    trade_target = _trade_house_target_staff(city)
+    if trade_target <= 0:
+        city.building_staffing.pop("trading_house", None)
+    else:
+        city.building_staffing["trading_house"] = trade_target
+
     pop = max(0.0, getattr(city, "population", 0.0))
     target = int(pop // N_EMPLOYEES_PER_LEVEL)
     current = int(city.employee_level_count)
@@ -227,6 +293,16 @@ def update_city_employment(
             if not _remove_staff_level(city, impr, rand):
                 break
             current -= 1
+
+    # Final strict trade-house clamp: always fire excess merchants when
+    # required trade capacity drops.
+    trade_target = _trade_house_target_staff(city)
+    if trade_target <= 0:
+        city.building_staffing.pop("trading_house", None)
+    else:
+        city.building_staffing["trading_house"] = trade_target
+
+    current = min(target, sum(city.staffing.values()) + sum(city.building_staffing.values()))
 
     city.employee_level_count = current
     city.professions = profession_breakdown(city, impr)
@@ -292,6 +368,8 @@ def _profit_per_level(
 
 def _building_profit_per_level(city, bkey: str) -> float:
     """Gold/tick for one staffed building level."""
+    if bkey == "trading_house":
+        return float(getattr(city, "trade_export_income", 0.0) or 0.0)
     b = BUILDING_TYPES.get(bkey)
     if b is None:
         return 0.0
@@ -305,6 +383,26 @@ def _building_profit_per_level(city, bkey: str) -> float:
         for good, amount in b.inputs.items()
     )
     return out_v - in_v
+
+
+def _producer_profit_per_level(city, key: str) -> float:
+    meta = PRODUCER_BUILDINGS.get(key)
+    if meta is None:
+        return 0.0
+    p = city.prices
+    out_good = meta.get("good")
+    in_good = meta.get("input_good")
+    out = float(meta.get("base_output", 0.0))
+    eff_good = meta.get("eff_good") or out_good
+    out *= float((getattr(city, "local_efficiency", None) or {}).get(eff_good, 1.0))
+
+    bonus = (getattr(city, "capacity_bonuses", None) or {}).get(key, {})
+    if float(bonus.get("mult", 0.0)) > 0.0:
+        out *= 1.0 + float(bonus.get("mult", 0.0)) * 0.5
+
+    out_val = out * p.get(out_good, BASE_PRICES.get(out_good, 1.0)) if out_good else 0.0
+    in_val = float(meta.get("input_per_level", 0.0)) * p.get(in_good, BASE_PRICES.get(in_good, 1.0)) if in_good else 0.0
+    return out_val - in_val
 
 
 def reallocate_workers_by_profit(
@@ -324,40 +422,35 @@ def reallocate_workers_by_profit(
         city.staffing = {}
     if not hasattr(city, "building_staffing") or city.building_staffing is None:
         city.building_staffing = {}
-    staffing = city.staffing
+    city.staffing = {}
     bstaff = city.building_staffing
 
-    # Entries: (base_profit_per_level, kind, key, capacity_levels)
-    producer_entries: list[tuple[float, str, object, int]] = []
-    for cell in city.tiles:
-        if not (0 <= cell < N):
-            continue
-        raw = impr[cell]
-        if not raw:
-            continue
-        it = imp_type(raw)
-        if it not in STAFFABLE_TYPES:
-            continue
-        bldg_lvl = imp_level(raw)
-        if bldg_lvl <= 0:
-            continue
-        if it in DIRECT_PRODUCER_TYPES:
-            ppl = _profit_per_level(cell, raw, city, ter, res, rivers, good_efficiency)
-            producer_entries.append((ppl, "imp", cell, bldg_lvl))
-
-    # City buildings compete for the same workforce budget.
+    # Entries: (base_profit_per_level, key, capacity_levels)
+    # Trading house is managed entirely by update_city_employment via
+    # _trade_house_target_staff — its profit signal (trade_export_income)
+    # collapses to 0 on any tick without trade, which would have this
+    # function fire the very staff that enables trade in the first place.
+    entries: list[tuple[float, str, int]] = []
     blevels = getattr(city, "buildings", None) or {}
     for bkey, lvl in blevels.items():
-        if lvl <= 0:
+        lvl_i = int(lvl)
+        if lvl_i <= 0:
             continue
-        ppl = _building_profit_per_level(city, bkey)
-        producer_entries.append((ppl, "bld", bkey, int(lvl)))
+        if bkey == "trading_house":
+            continue
+        if bkey in PRODUCER_BUILDINGS:
+            ppl = _producer_profit_per_level(city, bkey)
+        else:
+            b = BUILDING_TYPES.get(bkey)
+            if b is None or not b.staffable:
+                continue
+            ppl = _building_profit_per_level(city, bkey)
+        entries.append((ppl, bkey, lvl_i))
 
-    # Build slot table keyed by (kind, key).
-    slots: dict[tuple[str, object], dict] = {}
-    for base_ppl, kind, key, cap in producer_entries:
-        cur = staffing.get(key, 0) if kind == "imp" else bstaff.get(key, 0)
-        slots[(kind, key)] = {
+    slots: dict[str, dict] = {}
+    for base_ppl, key, cap in entries:
+        cur = bstaff.get(key, 0)
+        slots[key] = {
             "base": base_ppl,
             "cap": max(0, int(cap)),
             "alloc": max(0, int(cur)),
@@ -382,9 +475,12 @@ def reallocate_workers_by_profit(
             return base
         return base / (1.0 + MARKET_IMPACT_BETA * max(0, current_alloc))
 
-    donor_id = None
+    # Single-pass rebalance: at most one fire, at most one move per call.
+    # Many small calls converge gradually and avoid the 0 → 2 → 0 swings
+    # of full-reset reallocation.
+    donor_id: str | None = None
     donor_val = float("inf")
-    recv_id = None
+    recv_id: str | None = None
     recv_val = 0.0
 
     for sid, s in slots.items():
@@ -399,6 +495,7 @@ def reallocate_workers_by_profit(
                 recv_val = val
                 recv_id = sid
 
+    changed = False
     if donor_id is not None:
         fire_one = donor_val <= 0.0
         move_one = (
@@ -409,28 +506,27 @@ def reallocate_workers_by_profit(
 
         if fire_one:
             slots[donor_id]["alloc"] -= 1
+            changed = True
             if move_one:
                 slots[recv_id]["alloc"] += 1
         elif move_one:
             slots[donor_id]["alloc"] -= 1
             slots[recv_id]["alloc"] += 1
+            changed = True
 
-    # Rewrite only producer slots; keep non-producer staffing untouched.
-    for _, kind, key, _ in producer_entries:
-        if kind == "imp":
-            staffing.pop(key, None)
-        else:
-            bstaff.pop(key, None)
+    if not changed:
+        return
 
-    for (kind, key), s in slots.items():
+    # Rewrite staffing for tracked slots.
+    for _, key, _ in entries:
+        bstaff.pop(key, None)
+
+    for key, s in slots.items():
         if s["alloc"] <= 0:
             continue
-        if kind == "imp":
-            staffing[key] = s["alloc"]
-        else:
-            bstaff[key] = s["alloc"]
+        bstaff[key] = s["alloc"]
 
-    city.employee_level_count = sum(staffing.values()) + sum(bstaff.values())
+    city.employee_level_count = sum(bstaff.values())
     city.professions = profession_breakdown(city, impr)
     city.vacant_producer_levels = _vacant_producer_levels(city, impr)
 
@@ -443,28 +539,23 @@ def profession_breakdown(city, impr: list) -> dict[str, int]:
     """
     counts: dict[str, int] = {}
 
-    staffing = getattr(city, "staffing", None) or {}
-    for cell, level in staffing.items():
-        if level <= 0 or not (0 <= cell < N):
-            continue
-        raw = impr[cell]
-        if not raw:
-            continue
-        itype = IMPROVEMENTS.get(imp_type(raw))
-        if itype is None:
-            continue
-        for prof, per_level in itype.professions.items():
-            counts[prof] = counts.get(prof, 0) + per_level * int(level)
-
     bstaff = getattr(city, "building_staffing", None) or {}
     for bkey, level in bstaff.items():
         if level <= 0:
             continue
-        b = BUILDING_TYPES.get(bkey)
-        if b is None:
-            continue
-        for prof, per_level in b.professions.items():
+        if bkey in PRODUCER_BUILDINGS:
+            profs = PRODUCER_BUILDINGS[bkey].get("professions", {})
+        else:
+            b = BUILDING_TYPES.get(bkey)
+            if b is None:
+                continue
+            profs = b.professions
+        for prof, per_level in profs.items():
             counts[prof] = counts.get(prof, 0) + per_level * int(level)
+
+    unemployed = int(max(0, getattr(city, "unemployed_pop", 0) or 0))
+    if unemployed > 0:
+        counts["unemployed"] = counts.get("unemployed", 0) + unemployed
 
     return counts
 
@@ -565,8 +656,6 @@ def update_city_consumption_state(city) -> None:
 
         if current_level < profile.min_level:
             current_level = profile.min_level
-        elif current_level > profile.max_level:
-            current_level = profile.max_level
 
         city.consumption_levels[prof] = current_level
 

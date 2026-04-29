@@ -700,7 +700,7 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
         for (const city of civ.cities) {
             const cx = city.cell % W, cy = (city.cell / W) | 0;
             const px = cx * CELL + CELL / 2, py = cy * CELL + CELL / 2;
-            const rawSz = Math.sqrt(city.population) * 0.055;
+            const rawSz = Math.sqrt(city.population / 5) * 0.055;
             const sz = Math.max(1.2, Math.min(7.5, rawSz));
             const showLabel = city.is_capital || (zoom >= 1.5 && city.population > 60) || zoom >= 2.5;
 
@@ -984,35 +984,29 @@ export function getCellInfo(mapData, state, cellIndex) {
         if (n >= 0 && n < W * H && ter[n] <= 2) { coastal = true; break; }
     }
 
-    // Count farms/mines/etc for this city's tiles
+    // Capacity/usage summary for this city's tiles
     let cityStats = null;
     if (city) {
         const tiles = city.tiles || [];
-        let farms = 0, cotton = 0, mines = 0, lumber = 0, pastures = 0, resCount = 0;
-        let quarries = 0, windmills = 0, ports = 0, fisheries = 0, smitheries = 0, forts = 0;
-        let farmLvls = 0, mineLvls = 0;
+        let resCount = 0;
         for (const t of tiles) {
-            const raw = impr[t] || 0;
-            const it = impType(raw);
-            const lvl = impLevel(raw);
-            if (it === 1) { farms++; farmLvls += lvl; }
-            else if (it === 11) cotton++;
-            else if (it === 2) { mines++; mineLvls += lvl; }
-            else if (it === 3) lumber++;
-            else if (it === 4) quarries++;
-            else if (it === 5) pastures++;
-            else if (it === 6) windmills++;
-            else if (it === 7) forts++;
-            else if (it === 8) ports++;
-            else if (it === 10) fisheries++;
-            else if (it === 9) smitheries++;
-            
             if (res[t]) resCount++;
         }
-        const avgFarmLvl = farms ? (farmLvls / farms * 10 | 0) / 10 : 0;
-        const avgMineLvl = mines ? (mineLvls / mines * 10 | 0) / 10 : 0;
-        cityStats = { farms, cotton, mines, lumber, pastures, quarries, windmills, ports, fisheries, smitheries, forts, resCount, tileCount: tiles.length, avgFarmLvl, avgMineLvl };
+        const capacities = city.capacities || {};
+        const buildings = city.buildings || {};
+        const capacityTotal = Object.values(capacities).reduce((a, v) => a + (Number(v) || 0), 0);
+        const builtTotal = Object.keys(capacities).reduce((a, k) => a + (Number(buildings[k]) || 0), 0);
+        cityStats = {
+            resCount,
+            tileCount: tiles.length,
+            capacityTotal,
+            builtTotal,
+        };
     }
+
+    const tileCapacityCity = workingCity || city;
+    const tileCaps = tileCapacityCity?.tile_capacities?.[String(cellIndex)] || {};
+    const tileBonus = tileCapacityCity?.tile_capacity_bonuses?.[String(cellIndex)] || {};
 
     // Collect any armies sitting on this cell across all wars
     const armiesHere = [];
@@ -1115,15 +1109,30 @@ export function getCellInfo(mapData, state, cellIndex) {
             income_total: city.income_total || 0,
             income_per_person: city.income_per_person || 0,
             economic_output: city.economic_output || 0,
+            trade_export_volume: city.trade_export_volume || 0,
+            trade_export_income: city.trade_export_income || 0,
+            trade_capacity_required: city.trade_capacity_required || 0,
+            trade_capacity_provided: city.trade_capacity_provided || 0,
             avg_consumption_level: city.avg_consumption_level || 0,
+            population_growth_rate: city.population_growth_rate || 0,
+            growth_food_contribution: city.growth_food_contribution !== undefined ? city.growth_food_contribution : 0,
+            growth_consumption_penalty: city.growth_consumption_penalty !== undefined ? city.growth_consumption_penalty : 0,
+            growth_unemployment_penalty: city.growth_unemployment_penalty !== undefined ? city.growth_unemployment_penalty : 0,
             buildings: city.buildings || {},
             building_staffing: city.building_staffing || {},
             building_profit: city.building_profit || {},
             building_details: city.building_details || [],
+            capacities: city.capacities || {},
+            shared_capacities: city.shared_capacities || {},
+            capacity_bonuses: city.capacity_bonuses || {},
+            tile_capacities: city.tile_capacities || {},
+            tile_capacity_bonuses: city.tile_capacity_bonuses || {},
             attractiveness: city.attractiveness ?? 1.0,
             net_migration: city.net_migration ?? 0,
         } : null,
         imp:     _impInfo(impr[cellIndex] || 0, cellIndex, rivers, ter, workingCity, good_efficiency, mapData),
+        tile_capacity: tileCaps,
+        tile_capacity_bonus: tileBonus,
         river:   rivers.cell_river.has(cellIndex),
         coastal,
     };

@@ -463,6 +463,34 @@ function renderSelectedCityPanel(city, civ) {
         }).join("")
         : `<div style="font-size:9px;color:#8b949e">No city buildings</div>`;
 
+    const producerMeta = mapData?.producer_buildings || {};
+    const capacities = city.capacities || {};
+    const sharedCaps = city.shared_capacities || {};
+    const capKeys = Object.keys(capacities).filter(k => (capacities[k] || 0) > 0);
+    const capacityRows = capKeys.length
+        ? capKeys
+            .sort((a, b) => (capacities[b] || 0) - (capacities[a] || 0))
+            .map(k => {
+                const meta = producerMeta[k] || {};
+                const label = meta.label || k;
+                const icon = meta.icon || "🏗";
+                const used = city.buildings?.[k] || 0;
+                const cap = capacities[k] || 0;
+                const bonus = city.capacity_bonuses?.[k] || {};
+                const slots = bonus.slots || 0;
+                const mult = bonus.mult || 0;
+                const bonusTxt = slots > 0 && mult > 0 ? ` · bonus ${slots} @ +${(mult * 100).toFixed(0)}%` : "";
+                return `<div style="display:flex;justify-content:space-between;font-size:10px"><span>${icon} ${label}</span><span>${used}/${cap}${bonusTxt}</span></div>`;
+            }).join("")
+        : `<div style="font-size:9px;color:#8b949e">No producer capacity on current territory</div>`;
+
+    const agriCap = sharedCaps.agri || 0;
+    const agriUsed = (city.buildings?.farm || 0) + (city.buildings?.cotton_farm || 0);
+    const sharedRows = agriCap > 0
+        ? `<div style="font-size:10px;color:#8b949e">Shared agri pool: ${agriUsed}/${agriCap} (farm + cotton)</div>`
+        : "";
+
+
     const workforce = city.workforce || 0;
     const employed = city.employed_pop || 0;
     const unemployed = city.unemployed_pop || 0;
@@ -475,6 +503,17 @@ function renderSelectedCityPanel(city, civ) {
     const migColor = netMig > 0.05 ? "#3fb950" : (netMig < -0.05 ? "#f85149" : "#8b949e");
     const migArrow = netMig > 0.05 ? "↑" : (netMig < -0.05 ? "↓" : "·");
     const migLabel = netMig > 0.05 ? `+${netMig.toFixed(1)} incoming` : (netMig < -0.05 ? `${netMig.toFixed(1)} leaving` : "steady");
+
+    const growthPct = (city.population_growth_rate || 0) * 100.0;
+    const foodPct = (city.growth_food_contribution || 0) * 100.0;
+    const consPct = (city.growth_consumption_penalty || 0) * 100.0;
+    const unempPct = (city.growth_unemployment_penalty || 0) * 100.0;
+    const growthColor = growthPct > 0.02 ? "#3fb950" : (growthPct < -0.02 ? "#f85149" : "#8b949e");
+    const foodColor = foodPct >= 0 ? "#3fb950" : "#f85149";
+    const consColor = consPct < 0 ? "#f85149" : "#8b949e";
+    const unempColorPanel = unempPct < 0 ? "#f85149" : "#8b949e";
+    const fmtPct = v => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+    const growthLine = `<div>📈 Growth <span style="color:${growthColor}">${fmtPct(growthPct)}</span> / tick · <span style="font-size:9px;color:#8b949e">food <span style="color:${foodColor}">${fmtPct(foodPct)}</span> · consumption <span style="color:${consColor}">${fmtPct(consPct)}</span> · unemployment <span style="color:${unempColorPanel}">${fmtPct(unempPct)}</span></span></div>`;
 
     let governmentSection = "";
     if (city.is_capital && civ && civ.government) {
@@ -490,8 +529,25 @@ function renderSelectedCityPanel(city, civ) {
         const revenue = gov.last_tax_collected || 0;
         const buildSpend = gov.last_build_spending || 0;
         const fortSpend = gov.last_fort_spending || 0;
-        const netGov = revenue - fortSpend;
+        const benefitSpend = gov.last_benefit_spending || 0;
+        const flows = gov.last_flows || [];
+        const netGov = revenue - buildSpend - fortSpend - benefitSpend;
         const netGovColor = netGov >= 0 ? "#3fb950" : "#f85149";
+
+        const flowRows = flows.length
+            ? flows.map(flow => {
+                const amount = Number(flow.amount || 0);
+                const isExpense = String(flow.category || "income") === "expense";
+                const sign = isExpense ? "-" : "+";
+                const color = isExpense ? "#f85149" : "#3fb950";
+                const place = flow.city_name ? ` · ${flow.city_name}` : "";
+                const note = flow.note ? ` · ${flow.note}` : "";
+                return `<div style="display:flex;justify-content:space-between;gap:8px;margin-top:3px;font-size:9px">
+                    <span>${flow.label || flow.kind || "Flow"}${place}${note}</span>
+                    <span style="color:${color}">${sign}₿${amount.toFixed(2)}</span>
+                </div>`;
+            }).join("")
+            : `<div style="font-size:9px;color:#8b949e">No treasury flows recorded this tick.</div>`;
 
         const queueRows = (gov.construction_queue || []).slice(0, 4).map(order => {
             const statusColor = order.status === "built" ? "#3fb950" : (order.status?.startsWith("blocked") ? "#f85149" : "#f0c040");
@@ -558,8 +614,10 @@ function renderSelectedCityPanel(city, civ) {
             <div class="city-panel-section-label">Government (Capital)</div>
             <div>🏛 Treasury <span style="color:#58a6ff">₿${treasury.toFixed(2)}</span></div>
             <div>🧠 Disposition <span style="color:${dispositionColor}">${dispositionLabel}</span> · for ${dispTicks} ticks</div>
-            <div>💸 Revenue ₿${revenue.toFixed(2)}/t · Build Spend ₿${buildSpend.toFixed(2)} · Fort Spend ₿${fortSpend.toFixed(2)}/t · Net <span style="color:${netGovColor}">₿${netGov.toFixed(2)}/t</span></div>
+            <div>💸 Revenue ₿${revenue.toFixed(2)}/t · Build Spend ₿${buildSpend.toFixed(2)} · Fort Spend ₿${fortSpend.toFixed(2)}/t · Benefits ₿${benefitSpend.toFixed(2)}/t · Net <span style="color:${netGovColor}">₿${netGov.toFixed(2)}/t</span></div>
             <div style="margin-top:4px;font-size:9px;color:#8b949e">Policy snapshot: tax ${ (taxRate * 100).toFixed(1) }% · activation on ${ (gov.fort_buffer_on || 0).toFixed(2) } · off ${ (gov.fort_buffer_off || 0).toFixed(2) }</div>
+            <div style="margin-top:6px;font-size:9px;color:#8b949e">All treasury flows</div>
+            ${flowRows}
             <div style="margin-top:6px;font-size:9px;color:#8b949e">Government construction queue</div>
             ${queueRows || `<div style="font-size:9px;color:#8b949e">No construction queued.</div>`}
             <div style="margin-top:6px;font-size:9px;color:#8b949e">Fort upkeep basket (per funded fort/tick)</div>
@@ -578,6 +636,7 @@ function renderSelectedCityPanel(city, civ) {
         <div class="city-panel-sub">${tags.join(" · ") || "City"}</div>
         <div>👥 Pop ${city.population|0} · 💰 Gold ${city.gold|0}</div>
         <div>💼 Workforce ${workforce} · Employed ${employed} · Unemployed ${unemployed}</div>
+        ${growthLine}
         <div>🏦 Economy Size ₿${econOut.toFixed(1)}/t · 📈 Net Income <span style="color:${netColor}">₿${net.toFixed(2)}/t</span> · Per Person ₿${(city.income_per_person || 0).toFixed(3)}</div>
         <div>🧭 Pull <span style="color:${pullColor}">${pull.toFixed(2)}</span> · <span style="color:${migColor}">${migArrow} ${migLabel}</span></div>
 
@@ -589,6 +648,14 @@ function renderSelectedCityPanel(city, civ) {
         <div class="city-panel-section">
             <div class="city-panel-section-label">Buildings</div>
             ${buildingRows}
+            <div style="margin-top:6px;font-size:9px;color:#8b949e">🏛 Trading House Lv.${(city.buildings?.trading_house || 0)} · merchants ${(city.building_staffing?.trading_house || 0)}/${(city.buildings?.trading_house || 0)}</div>
+            <div style="font-size:9px">capacity ${(city.trade_capacity_required || 0).toFixed(1)}/${(city.trade_capacity_provided || 0).toFixed(1)} · exports ${(city.trade_export_volume || 0).toFixed(1)} · <span style="color:${((city.building_profit?.trading_house || city.trade_export_income || 0) >= 0) ? '#3fb950' : '#f85149'}">₿${(city.building_profit?.trading_house || city.trade_export_income || 0).toFixed(2)}/t</span></div>
+        </div>
+
+        <div class="city-panel-section">
+            <div class="city-panel-section-label">Producer Capacity</div>
+            ${sharedRows}
+            ${capacityRows}
         </div>
 
         ${renderProfessionsSection(city, civ)}
@@ -857,6 +924,27 @@ canvas.addEventListener("click", e => {
 });
 
 function showTooltip(x, y, info) {
+    const producerMeta = mapData?.producer_buildings || {};
+    const fmtCap = (caps, bonus) => {
+        const keys = Object.keys(caps || {}).filter(k => (caps[k] || 0) > 0);
+        if (!keys.length) return "";
+        const rows = keys
+            .sort((a, b) => (caps[b] || 0) - (caps[a] || 0))
+            .slice(0, 7)
+            .map(k => {
+                const m = producerMeta[k] || {};
+                const icon = m.icon || "🏗";
+                const label = m.label || k;
+                const b = (bonus || {})[k] || {};
+                const slots = b.slots || 0;
+                const mult = b.mult || 0;
+                const bTxt = slots > 0 && mult > 0 ? ` · bonus ${slots} @ +${(mult * 100).toFixed(0)}%` : "";
+                return `<div style="font-size:9px;display:flex;justify-content:space-between"><span>${icon} ${label}</span><span>${caps[k]}${bTxt}</span></div>`;
+            })
+            .join("");
+        return `<div style="margin-top:4px;border-top:1px solid #30363d;padding-top:4px;font-size:10px;color:#8b949e">Tile Capacity Contribution</div>${rows}`;
+    };
+
     let lines = [
         `<div class="tt-coord">(${info.x},${info.y}) ${info.terrain} ${info.alt}m</div>`,
         info.river   ? `<div style="color:#4aaef0">〰 River</div>` : "",
@@ -864,6 +952,7 @@ function showTooltip(x, y, info) {
         info.imp.name !== "—" ? `<div style="color:#c8a000">${info.imp.name} Lv.${info.imp.level}${info.imp.detail ? ` — ${info.imp.detail}` : ""}</div>` : "",
         info.imp.employees ? `<div style="color:#9a8fb8">${info.imp.employees}</div>` : "",
         info.imp.efficiency ? `<div style="color:#8dd9c7">${info.imp.efficiency}</div>` : "",
+        fmtCap(info.tile_capacity, info.tile_capacity_bonus),
         info.res   ? `<div>${info.res}</div>` : "",
         info.civ   ? `<div style="color:${info.civ.color};font-weight:600">${info.civ.name}</div>` : "",
     ];
@@ -896,9 +985,21 @@ function showTooltip(x, y, info) {
         const migArrow = netMig > 0.05 ? "↑" : (netMig < -0.05 ? "↓" : "·");
         const migLabel = netMig > 0.05 ? `+${netMig.toFixed(1)} incoming` : (netMig < -0.05 ? `${netMig.toFixed(1)} leaving` : "steady");
         const consLvl = c.avg_consumption_level || 0;
+        const growthRate = (c.population_growth_rate || 0) * 100.0;
+        const growthColor = growthRate > 0.02 ? "#3fb950" : (growthRate < -0.02 ? "#f85149" : "#8b949e");
         lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Migration</div>`);
         lines.push(`<div style="font-size:10px">🧭 Pull <span style="color:${pullColor}">${pull.toFixed(2)}</span> · <span style="color:${migColor}">${migArrow} ${migLabel}</span></div>`);
         lines.push(`<div style="font-size:10px">🛒 Avg Consumption Tier ${consLvl.toFixed(2)}</div>`);
+        lines.push(`<div style="font-size:10px">📈 Growth <span style="color:${growthColor}">${growthRate >= 0 ? "+" : ""}${growthRate.toFixed(2)}%</span> / tick</div>`);
+        
+        // Growth breakdown for debugging
+        const foodGrowth = ((c.growth_food_contribution || 0) * 100.0);
+        const consumPenalty = ((c.growth_consumption_penalty || 0) * 100.0);
+        const unempPenalty = ((c.growth_unemployment_penalty || 0) * 100.0);
+        const foodColor = foodGrowth > 0 ? "#3fb950" : "#f85149";
+        const penaltyColor = consumPenalty < 0 ? "#f85149" : "#8b949e";
+        const unempPenaltyColor = unempPenalty < 0 ? "#f85149" : "#8b949e";
+        lines.push(`<div style="font-size:9px; color:#8b949e">  • Food: <span style="color:${foodColor}">${foodGrowth >= 0 ? "+" : ""}${foodGrowth.toFixed(2)}%</span> | Consumption: <span style="color:${penaltyColor}">${consumPenalty >= 0 ? "+" : ""}${consumPenalty.toFixed(2)}%</span> | Unemployment: <span style="color:${unempPenaltyColor}">${unempPenalty >= 0 ? "+" : ""}${unempPenalty.toFixed(2)}%</span></div>`);
 
         // ── Income breakdown ──────────────────────────────────────────
         const incColor = c.income_total > 0 ? "#3fb950" : c.income_total < 0 ? "#f85149" : "#8b949e";
@@ -965,19 +1066,6 @@ function showTooltip(x, y, info) {
         }
 
         if (s) {
-            const imps = [];
-            if (s.farms)      imps.push(`🌾 ${s.farms} farms${s.avgFarmLvl > 1 ? ` (avg Lv.${s.avgFarmLvl})` : ""}`);
-            if (s.cotton)     imps.push(`🧵 ${s.cotton} cotton farms`);
-            if (s.mines)      imps.push(`⛏ ${s.mines} mines${s.avgMineLvl > 1 ? ` (avg Lv.${s.avgMineLvl})` : ""}`);
-            if (s.lumber)     imps.push(`🌲 ${s.lumber} lumber`);
-            if (s.pastures)   imps.push(`🐄 ${s.pastures} pastures`);
-            if (s.quarries)   imps.push(`🪨 ${s.quarries} quarries`);
-            if (s.windmills)  imps.push(`🌀 ${s.windmills} windmills`);
-            if (s.ports)      imps.push(`⚓ ${s.ports} ports`);
-            if (s.fisheries)  imps.push(`🐟 ${s.fisheries} fisheries`);
-            if (s.smitheries) imps.push(`🔨 ${s.smitheries} smitheries`);
-            if (s.forts)      imps.push(`🛡 ${s.forts} forts`);
-
             const focusMap   = {0: "Farming", 1: "Mining", 2: "Defense", 3: "Trade"};
             const focusEmoji = {0: "🌾",       1: "⛏",     2: "🛡",      3: "📦"};
             const focusColor = {0: "#c8a000", 1: "#6a737d", 2: "#d73a49", 3: "#3b8bd6"};
@@ -987,10 +1075,27 @@ function showTooltip(x, y, info) {
             lines.push(`<div style="color:#8b949e">⛏ Copper Ore ${c.city_ore}/${c.city_ore_total} · 🧱 Stone ${c.city_stone}/${c.city_stone_total} · 🔶 Copper ${c.city_metal}/${c.city_metal_total}</div>`);
 
             lines.push(`<div style="color:#8b949e">📐 ${s.tileCount} tiles · 💎 ${s.resCount} resources</div>`);
-            if (imps.length) {
-                lines.push(`<div style="color:#8b949e">${imps.slice(0, 3).join(" · ")}</div>`);
-                if (imps.length > 3) lines.push(`<div style="color:#8b949e">${imps.slice(3, 6).join(" · ")}</div>`);
-                if (imps.length > 6) lines.push(`<div style="color:#8b949e">${imps.slice(6).join(" · ")}</div>`);
+            lines.push(`<div style="color:#8b949e">🏗 Producer capacity ${s.builtTotal || 0}/${s.capacityTotal || 0}</div>`);
+
+            const caps = c.capacities || {};
+            const keys = Object.keys(caps).filter(k => (caps[k] || 0) > 0);
+            if (keys.length) {
+                const capLines = keys
+                    .sort((a, b) => (caps[b] || 0) - (caps[a] || 0))
+                    .slice(0, 6)
+                    .map(k => {
+                        const m = producerMeta[k] || {};
+                        const used = c.buildings?.[k] || 0;
+                        const cap = caps[k] || 0;
+                        return `${m.icon || "🏗"} ${m.label || k} ${used}/${cap}`;
+                    });
+                lines.push(`<div style="color:#8b949e">${capLines.join(" · ")}</div>`);
+            }
+
+            const agriCap2 = c.shared_capacities?.agri || 0;
+            if (agriCap2 > 0) {
+                const agriUsed2 = (c.buildings?.farm || 0) + (c.buildings?.cotton_farm || 0);
+                lines.push(`<div style="color:#8b949e">🌾 Shared agri pool ${agriUsed2}/${agriCap2}</div>`);
             }
         }
 
@@ -1017,6 +1122,18 @@ function showTooltip(x, y, info) {
                     : "-";
                 lines.push(`<div style="font-size:10px; display:flex; justify-content:space-between"><span>🏭 ${name} Lv.${lvl} · 👥 ${staffed}/${lvl}</span><span style="color:${pColor}">₿${prof.toFixed(2)}/t</span></div>`);
                 lines.push(`<div style="font-size:9px; color:#8b949e">in: ${inTxt || "-"} · out: ${outTxt || "-"}</div>`);
+            }
+
+            const tradeLv = bLevels.trading_house || 0;
+            const tradeStaff = bStaff.trading_house || 0;
+            const tradeProfit = bProfit.trading_house || c.trade_export_income || 0;
+            const tradeVol = c.trade_export_volume || 0;
+            const tradeCapReq = c.trade_capacity_required || 0;
+            const tradeCapProv = c.trade_capacity_provided || 0;
+            if (tradeLv > 0 || tradeVol > 0 || tradeProfit > 0 || tradeCapReq > 0 || tradeCapProv > 0) {
+                const tradeColor = tradeProfit >= 0 ? "#3fb950" : "#f85149";
+                lines.push(`<div style="margin-top:6px;font-size:9px;color:#8b949e">🏛 Trading House Lv.${tradeLv} · merchants ${tradeStaff}/${tradeLv}</div>`);
+                lines.push(`<div style="font-size:9px">capacity ${tradeCapReq.toFixed(1)}/${tradeCapProv.toFixed(1)} · exports ${tradeVol.toFixed(1)} · <span style="color:${tradeColor}">₿${tradeProfit.toFixed(2)}/t</span></div>`);
             }
         }
     }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from typing import Callable, Optional
 
@@ -9,6 +10,7 @@ from .constants import (
     N, IMP, FOCUS, T, CAN_FARM,
     INVEST_PERIOD_TICKS, FOCUS_HMM_PERIOD,
     FORT_BUILD_METAL_COST, BASE_PRICES, N_EMPLOYEES_PER_LEVEL,
+    TRADE_HOUSE_CAPACITY_PER_EMPLOYEE,
 )
 from . import employment
 from .employment import STAFFABLE_TYPES as _STAFFABLE
@@ -20,6 +22,8 @@ from .improvements import (
 from .helpers import neighbors, cell_on_river
 from .buildings import BUILDING_TYPES, get_building_type
 from .government import ensure_government
+from .economy_profiles import IMPROVEMENT_ECONOMY
+from .capacity import PRODUCER_BUILDINGS
 from .models import City, Civ
 
 
@@ -29,83 +33,24 @@ _FORT_TERRAIN = (T.PLAINS, T.GRASS, T.FOREST, T.HILLS)
 # Construction economics tuning.
 NEW_TILE_BASE_COST = 500.0
 NEW_BUILDING_BASE_COST = 3000.0
-CAPEX_PAYBACK_TICKS = 240.0
-BUILDING_PAYBACK_TICKS = 180.0
-
-# Slack-driven payback relief. When a city has idle labor AND gold piling up,
-# the payback window is stretched so marginal builds still clear the gate —
-# absorbing workers and draining reserves instead of stalling in an
-# oversupply trap. Both weights are per-person ratios so the knobs are
-# scale-invariant; the final boost multiplies (unemp × gold) so both
-# conditions must be present, matching the user's intent.
-_SLACK_UNEMP_FLOOR = 0.03   # unemp rate below this → no relief
-_SLACK_UNEMP_SPAN  = 0.17   # full weight at ~20% unemp
-_SLACK_GOLD_FULL_PP = 2.0   # gold/person that saturates the gold weight
-_SLACK_MAX_BOOST    = 3.0   # payback can stretch up to 4× (1 + 3)
-
-
-def _slack_payback_mult(city: City) -> float:
-    """Return the payback-window multiplier (≥1). Larger = more lenient.
-
-    Only exceeds 1 when BOTH unemployment and gold-per-person are above
-    their floors; either alone leaves the gate at baseline strictness.
-    """
-    pop = max(1.0, float(getattr(city, "population", 0.0)))
-    unemp = int(getattr(city, "unemployed_pop", 0) or 0)
-    unemp_rate = unemp / pop
-    gold = float(getattr(city, "gold", 0.0))
-
-    unemp_weight = max(0.0, min(1.0, (unemp_rate - _SLACK_UNEMP_FLOOR) / _SLACK_UNEMP_SPAN))
-    if unemp_weight <= 0.0:
-        return 1.0
-    gold_weight = max(0.0, min(1.0, (gold / pop) / _SLACK_GOLD_FULL_PP))
-    if gold_weight <= 0.0:
-        return 1.0
-    return 1.0 + unemp_weight * gold_weight * _SLACK_MAX_BOOST
-
+CAPEX_PAYBACK_TICKS = 2400.0
+BUILDING_PAYBACK_TICKS = 1800.0
 
 def _touch_city_production(city: City) -> None:
     city._production_version = getattr(city, "_production_version", 0) + 1
 
 
-# ── Upgrade cost (Gold only, but scaled by material prices) ──────────────────
+# ── Upgrade cost ─────────────────────────────────────────────────────────────
 
 def _upgrade_cost(city: City, it: int, current_level: int) -> float:
-    # Base gold cost scales with level. New builds and the first upgrade
-    # (current_level 0 or 1) stay at baseline; the ramp is intentionally steep
-    # so high-level buildings dominate a city's gold budget.
-    level_mult = max(1.0, current_level) ** 1.4
-    if current_level <= 0:
-        # New improvements on new tiles are intentionally expensive.
-        base_gold = NEW_TILE_BASE_COST
-    else:
-        base_gold = 8.0 * level_mult
-    
-    # Material requirements (now purely for price scaling)
-    mats = {}
-    if current_level > 0:
-        if it == IMP.FARM:
-            mats["lumber"] = 4.0 * level_mult
-        elif it == IMP.MINE or it == IMP.QUARRY:
-            mats["lumber"] = 6.0 * level_mult
-            mats["stone"]  = 3.0 * level_mult
-        elif it == IMP.SMITHERY:
-            mats["stone"]  = 10.0 * level_mult
-            mats["metal"]  = 4.0 * level_mult
-        elif it == IMP.FORT:
-            mats["stone"]  = 15.0 * level_mult
-            mats["metal"]  = 8.0 * level_mult
-        else:
-            mats["lumber"] = 4.0 * level_mult
-            mats["stone"]  = 2.0 * level_mult
+    """Flat cost for tile improvements regardless of level.
 
-    # Add material costs based on local prices
-    total_cost = base_gold
-    for good, amt in mats.items():
-        price = city.prices.get(good, 1.0)
-        total_cost += amt * price
-        
-    return total_cost
+    Tile-improvement levels mainly act as capacity markers — production
+    happens via the fungible producer-building pool. Scaling cost with
+    level didn't carry useful economic signal beyond "rich cities can
+    afford more", so we keep it flat and let ROI drive build decisions.
+    """
+    return NEW_TILE_BASE_COST
 
 
 def _try_buy(city: City, cost: float) -> bool:
@@ -133,11 +78,11 @@ def _building_upgrade_cost(city: City, bkey: str, current_level: int) -> float:
     if b is None:
         return float("inf")
     level_mult = max(1.0, current_level + 1) ** 1.5
-    base_gold = NEW_BUILDING_BASE_COST if current_level <= 0 else 24.0 * level_mult
-    mat_cost = 0.0
-    for good in b.cost_resources:
-        mat_cost += city.prices.get(good, BASE_PRICES.get(good, 1.0)) * 4.0 * level_mult
-    return base_gold + mat_cost
+    base_gold = NEW_BUILDING_BASE_COST if current_level <= 0 else 2000.0 * level_mult
+    #mat_cost = 0.0
+    #for good in b.cost_resources:
+    #    mat_cost += city.prices.get(good, BASE_PRICES.get(good, 1.0)) * 4.0 * level_mult
+    return base_gold 
 
 
 def _city_is_profitable_for_expansion(city: City) -> bool:
@@ -155,30 +100,36 @@ def _city_is_profitable_for_expansion(city: City) -> bool:
     return quality_income >= pop * 0.01
 
 
-def _try_build_city_buildings(city: City) -> bool:
-    """Market-driven city-building investment.
+# Block new construction when more than this fraction of existing staffable
+# levels are unstaffed. The per-element gates (≤1 unstaffed level per
+# building/tile) pass independently, so without a city-wide check a
+# gold-rich city happily stacks idle capacity across many factories at once.
+_MAX_VACANCY_RATIO = 0.10
 
-    Loops so a gold-rich city can stack several upgrades in one call. We
-    project staffing forward each iteration (assuming new levels get filled
-    from unemployment) so the vacancy gate doesn't cap us at two upgrades
-    per building while there are still jobless workers to absorb the levels.
+
+
+
+
+def _try_build_city_buildings(city: City, impr: list) -> bool:
+    """Pure-ROI growth of city-center buildings up to closed-form targets.
+
+    `_estimate_target_building_levels` projects how many levels each
+    building should have at equilibrium prices. The loop greedily adds
+    levels to the highest-ROI underbuilt building, projecting staffing
+    forward so consecutive upgrades stack before real employment runs.
     """
     if not hasattr(city, "buildings") or city.buildings is None:
         city.buildings = {}
     if not hasattr(city, "building_staffing") or city.building_staffing is None:
         city.building_staffing = {}
 
-    if not _city_is_profitable_for_expansion(city):
-        return False
+
+    targets = _estimate_target_building_levels(city)
 
     staffing = city.building_staffing
     remaining_unemployed = int(getattr(city, "unemployed_pop", 0))
-    # Virtual "staffed" delta per key: levels we upgraded this call that we
-    # assume unemployment absorbs. Keeps the vacancy gate from false-tripping
-    # on our own just-added capacity.
     filled: dict[str, int] = {}
     upgraded_any = False
-    payback = BUILDING_PAYBACK_TICKS * _slack_payback_mult(city)
 
     while True:
         best_key: Optional[str] = None
@@ -187,8 +138,20 @@ def _try_build_city_buildings(city: City) -> bool:
             cur_lvl = int(city.buildings.get(key, 0))
             if cur_lvl >= b.max_level:
                 continue
+            target = min(int(targets.get(key, cur_lvl)), b.max_level)
+            if cur_lvl >= target:
+                continue
             virtual_staffed = int(staffing.get(key, 0)) + filled.get(key, 0)
-            if cur_lvl - virtual_staffed > 1:
+            if cur_lvl - virtual_staffed > 0:
+                continue
+            if key == "trading_house":
+                trade_income = float(getattr(city, "trade_export_income", 0.0) or 0.0)
+                trade_potential = float(getattr(city, "trade_potential", 0.0) or 0.0)
+                pop_fallback = float(getattr(city, "population", 0.0) or 0.0) * 0.15 + 4.0
+                score = max(trade_income, trade_potential, pop_fallback) - (_building_upgrade_cost(city, key, cur_lvl) / BUILDING_PAYBACK_TICKS)
+                if score > best_score:
+                    best_score = score
+                    best_key = key
                 continue
             out_v = 0.0
             for g, amt in b.outputs.items():
@@ -198,26 +161,22 @@ def _try_build_city_buildings(city: City) -> bool:
                 in_v += amt * city.prices.get(g, BASE_PRICES.get(g, 1.0))
             margin = out_v - in_v
             cost = _building_upgrade_cost(city, key, cur_lvl)
-            # Payback-style ROI score: positive means the building should
-            # earn back its capex within the payback window. Window stretches
-            # when the city has idle labor + idle gold (see _slack_payback_mult).
-            score = margin - (cost / payback)
+            score = margin - (cost / BUILDING_PAYBACK_TICKS)
             if score > best_score:
                 best_score = score
                 best_key = key
 
-        if best_key is None or best_score <= 0.0:
+        if best_key is None:
             break
 
         cur_lvl = int(city.buildings.get(best_key, 0))
         cost = _building_upgrade_cost(city, best_key, cur_lvl)
 
-        # Require either unemployment to absorb, or strong enough margin to
-        # pull workers away from existing lower-profit jobs. Friction scales
-        # with the upgrade's own cost: pulling staff into a 2000-gold
-        # megafactory needs a bigger edge than pulling them into a cheap
-        # mill, and this stays meaningful as prices drift.
-        friction_threshold = cost / payback * 0.5
+        # Labor opportunity cost: when no idle labor is available, the
+        # marginal level must clear a friction threshold to justify pulling
+        # a worker off a lower-margin existing job. Friction scales with
+        # the upgrade's own cost so it stays meaningful as prices drift.
+        friction_threshold = cost / BUILDING_PAYBACK_TICKS * 0.5
         if remaining_unemployed < N_EMPLOYEES_PER_LEVEL and best_score < friction_threshold:
             break
 
@@ -228,24 +187,24 @@ def _try_build_city_buildings(city: City) -> bool:
         if remaining_unemployed >= N_EMPLOYEES_PER_LEVEL:
             filled[best_key] = filled.get(best_key, 0) + 1
             remaining_unemployed -= N_EMPLOYEES_PER_LEVEL
-        # else: high-margin upgrade without workers on hand. Don't advance
-        # `filled`; next iter's vacancy check will catch it.
         upgraded_any = True
 
     return upgraded_any
 
 
 # ── Profitability hint ────────────────────────────────────────────────────
-# Producer imp for each tradable good. Used to bias "what to build next"
-# toward whichever output is currently scarce (high local price).
-_GOOD_TO_PRODUCER = {
-    "grain":  IMP.FARM,
-    "fabric": IMP.COTTON,
-    "lumber": IMP.LUMBER,
-    "copper_ore": IMP.MINE,
-    "iron_ore": IMP.MINE,
-    "stone":  IMP.QUARRY,
-    "copper": IMP.SMITHERY,
+# Producer-good pairs derived from economy profiles so city development
+# automatically follows newly added goods/improvements.
+_PRODUCER_GOOD_PAIRS: tuple[tuple[int, str], ...] = tuple(
+    (imp_t, profile.output_good)
+    for imp_t, profile in IMPROVEMENT_ECONOMY.items()
+    if profile.output_good
+)
+
+# Primary output-good for each producer type (if any). Drives per-call
+# saturation and need weighting in the greedy development loop.
+_IMP_TO_GOOD: dict[int, str] = {
+    imp_t: good for imp_t, good in _PRODUCER_GOOD_PAIRS
 }
 
 # Minimum price-to-base ratio before we consider a good "scarce enough to
@@ -269,7 +228,7 @@ def _most_profitable_imp(city: City) -> Optional[int]:
     best_imp: Optional[int] = None
     best_score = _PROFIT_THRESHOLD
     local_eff = getattr(city, "local_efficiency", None) or {}
-    for good, imp_t in _GOOD_TO_PRODUCER.items():
+    for imp_t, good in _PRODUCER_GOOD_PAIRS:
         base = BASE_PRICES.get(good, 1.0)
         price = city.prices.get(good, base)
         price_ratio = price / max(base, 0.01)
@@ -363,63 +322,22 @@ def _tile_profit(
     )
 
 
-# Primary good produced by each tile imp. Drives the need signal (local
-# price ratio) and the intra-call saturation decay. FARM and FISHERY share
-# "grain" deliberately: both feed the same market, so building one should
-# dampen desire for the other in the same call.
-_IMP_TO_GOOD = {
-    IMP.FARM:    "grain",
-    IMP.FISHERY: "grain",
-    IMP.COTTON:  "fabric",
-    IMP.LUMBER:  "lumber",
-    IMP.MINE:    "copper_ore",
-    IMP.QUARRY:  "stone",
-}
-
-# After placing N of the same good in one call, multiply the next candidate
-# of that good by this factor^N. 0.5 is aggressive enough that the loop
-# flips to a different scarce good after ~1-2 builds.
-_SATURATION_DECAY = 0.5
-
-# Score multiplier when a candidate matches the civ's current build_type.
-# Kept moderate so a genuinely scarce good can still beat a mismatched goal.
-_GOAL_PREFERENCE_BONUS = 1.4
-
-# Clamp for the need multiplier — ratio floor prevents negative feedback
-# from collapsing a glutted good's score to zero (we may still want to
-# replace a unstaffed tile), ceiling keeps a single price spike from
-# overwhelming profitability entirely.
-_NEED_MIN = 0.3
-_NEED_MAX = 3.5
-
-
-def _need_multiplier(city: City, good: str | None) -> float:
-    """How badly the city wants more of ``good``, as a score multiplier.
-
-    Uses the local price ratio (``city.prices[good] / BASE_PRICES[good]``)
-    directly — scarce goods trade above base, glutted goods below. A ratio
-    of 1.0 is neutral; 2.0 doubles the tile's score, 0.5 halves it.
-    """
-    if not good:
-        return 1.0
-    base = BASE_PRICES.get(good, 1.0)
-    price = city.prices.get(good, base)
-    ratio = price / max(base, 0.01)
-    return max(_NEED_MIN, min(_NEED_MAX, ratio))
 
 
 # Max tile-level upgrades the development loop will allow stacked on a single
 # tile in one call. Stops a greedy city from taking a farm L1 → L49 in one
 # invest tick just because it has the gold; forces growth to spread across
 # tiles and types. Across multiple ticks the tile can still climb to max.
-_MAX_UPGRADES_PER_TILE_PER_CALL = 5
+_MAX_UPGRADES_PER_TILE_PER_CALL = 50
 
 # Tolerance for unstaffed levels on a tile before we refuse to upgrade it.
-# Ensures we fill existing capacity before piling on more.
-_MAX_UNSTAFFED_FOR_UPGRADE = 1
+# Tightened from 1 to 0: any unstaffed level blocks the upgrade. Combined
+# with the city-wide _has_capacity_headroom gate, this stops cities from
+# stacking idle capacity across many tiles.
+_MAX_UNSTAFFED_FOR_UPGRADE = 10
 
 
-_BUILD_CANDS = (IMP.FARM, IMP.COTTON, IMP.FISHERY, IMP.LUMBER, IMP.MINE, IMP.QUARRY)
+_BUILD_CANDS = tuple(dict.fromkeys(_IMP_TO_GOOD.keys()))
 
 
 # ── Focus HMM transitions ──────────────────────────────────────────────────
@@ -431,7 +349,7 @@ def _focus_transition(
     pop = max(1.0, city.population)
     
     # Use supply dict for signals
-    grain = city.supply.get("grain", 0.0) + city.supply.get("bread", 0.0)
+    grain = city.supply.get("grain", 0.0) + city.supply.get("bread", 0.0) + city.supply.get("meat", 0.0)
     copper_ore = city.supply.get("copper_ore", 0.0)
     iron_ore = city.supply.get("iron_ore", 0.0)
     stone = city.supply.get("stone", 0.0)
@@ -706,7 +624,6 @@ def _rebuild_improvement(
     staffing = city.staffing
     best_choice: Optional[tuple[float, int, int]] = None
     best_gain = 0.0
-    payback = CAPEX_PAYBACK_TICKS * _slack_payback_mult(city)
 
     for cell in tiles:
         if not (0 <= cell < N):
@@ -726,7 +643,7 @@ def _rebuild_improvement(
 
         best_alt_type: Optional[int] = None
         best_alt_profit = 0.0
-        for cand in (IMP.FARM, IMP.COTTON, IMP.FISHERY, IMP.LUMBER, IMP.MINE, IMP.QUARRY):
+        for cand in _BUILD_CANDS:
             if cand == cur_type:
                 continue
             p = _tile_profit(city, cell, cand, ter, res, rivers, good_efficiency)
@@ -738,7 +655,7 @@ def _rebuild_improvement(
             continue
 
         rebuild_cost = _upgrade_cost(city, best_alt_type, 0) * 1.6
-        gain = best_alt_profit - keep_value - (rebuild_cost / payback)
+        gain = best_alt_profit - keep_value - (rebuild_cost / CAPEX_PAYBACK_TICKS)
         if gain > best_gain and best_alt_profit >= keep_value * 1.35 + 0.2:
             best_gain = gain
             best_choice = (gain, cell, best_alt_type)
@@ -758,21 +675,416 @@ def _rebuild_improvement(
 
 # ── Public entry: per-civ per-tick city development ───────────────────────
 
-def _pick_build_type(city: City, goal_imp: Optional[int], impr: list) -> int:
-    """Decide what this city should work on this tick.
+def _pick_build_type(city: City, goal_producer: Optional[str], impr: list) -> Optional[str]:
+    """Choose the producer building to prioritize this tick.
 
     Priority order:
-      1. Profitability bias (same 70/30 as before) picks the most profitable
-         producer when one is meaningfully above base price.
-      2. Otherwise the civ's current goal.
-      3. Fallback: a farm (cheap, always useful when you're starving).
+      1. Profitability bias: pick producer with highest expected margin.
+      2. Otherwise goal_producer if specified.
+      3. Fallback: farm (always useful, always has capacity).
     """
-    profitable = _most_profitable_imp(city)
-    if profitable is not None and random.random() < _PROFIT_BIAS:
-        return profitable
-    if goal_imp is not None:
-        return goal_imp
-    return profitable if profitable is not None else IMP.FARM
+    best_key: Optional[str] = None
+    best_margin = 0.0
+    local_eff = getattr(city, "local_efficiency", None) or {}
+
+    for key, meta in PRODUCER_BUILDINGS.items():
+        margin = _producer_margin(city, key)
+        eff_good = meta.get("eff_good") or meta.get("good")
+        eff = local_eff.get(eff_good, 1.0) if eff_good else 1.0
+
+        if margin > best_margin:
+            best_margin = margin
+            best_key = key
+
+    # Profitability bias (70% of the time choose profitable over goal).
+    if best_key is not None and random.random() < 0.7:
+        return best_key
+    if goal_producer is not None:
+        return goal_producer
+    return best_key if best_key is not None else "farm"
+
+
+def _develop_producer_buildings(
+    city: City,
+    civ: Civ,
+    goal_producer: Optional[str] = None,
+) -> bool:
+    """Pure-ROI growth of producer buildings up to closed-form target levels.
+
+    `_estimate_target_producer_levels` computes the equilibrium count per
+    building (the level at which adding one more would yield zero ROI given
+    price feedback). The greedy loop then adds levels to the highest-ROI
+    underbuilt producer until targets, gold, or the action cap are reached.
+    The ``goal_producer`` argument is preserved for caller compatibility but
+    no longer biases scoring — decisions are purely ROI.
+    """
+    del goal_producer  # decisions are purely ROI now
+
+    buildings = getattr(city, "buildings", None) or {}
+    capacities = getattr(city, "capacities", None) or {}
+    shared = getattr(city, "shared_capacities", None) or {}
+
+    targets = _estimate_target_producer_levels(city)
+
+    any_action = False
+    unemployed = int(getattr(city, "unemployed_pop", 0) or 0)
+    # Remove hard cap per-tick so cities may expand until targets, gold,
+    # or labour limits are reached. Still bounded by unemployed labour.
+    max_actions = max(3, unemployed // N_EMPLOYEES_PER_LEVEL + 2)
+    payback = _effective_capex_payback(city)
+
+    for _ in range(max_actions):
+        best_key: Optional[str] = None
+        best_score = 0.0
+
+        for key in PRODUCER_BUILDINGS.keys():
+            cur_level = int(buildings.get(key, 0))
+            cap = int(capacities.get(key, 0))
+            target = min(int(targets.get(key, cur_level)), cap)
+            if cur_level >= target:
+                continue
+
+            if key in ("farm", "cotton_farm"):
+                agri_cap = int(shared.get("agri", 0))
+                agri_used = int(buildings.get("farm", 0)) + int(buildings.get("cotton_farm", 0))
+                if agri_used >= agri_cap:
+                    continue
+
+            margin = _producer_margin(city, key)
+            cost = _producer_upgrade_cost(city, key, cur_level)
+            score = margin - (cost / payback)
+            if score > best_score:
+                best_score = score
+                best_key = key
+
+        if best_key is None:
+            break
+
+        cost = _producer_upgrade_cost(city, best_key, int(buildings.get(best_key, 0)))
+        if not _try_buy(city, cost):
+            break
+
+        buildings[best_key] = int(buildings.get(best_key, 0)) + 1
+        any_action = True
+        unemployed = max(0, unemployed - N_EMPLOYEES_PER_LEVEL)
+
+    city.buildings = buildings
+    return any_action
+
+
+def _producer_upgrade_cost(city: City, key: str, current_level: int) -> float:
+    # Producer levels are frequent, city-scale investments. Keep costs in the
+    # same order as typical city gold flow so expansion doesn't deadlock.
+    level_mult = max(1.0, current_level + 1) ** 1.18
+    return 35.0 * level_mult
+
+
+def _effective_capex_payback(city: City) -> float:
+    """Capex payback hurdle, stretched when the city has idle labor.
+
+    Idle labor has near-zero opportunity cost: putting a worker on a less
+    profitable building still beats them sitting unemployed. We model that
+    by accepting a longer capital payback when unemployment is high — the
+    pure ROI gate stays the same at full employment.
+    """
+    pop = max(1.0, float(getattr(city, "population", 0.0) or 0.0))
+    unemp_rate = float(getattr(city, "unemployed_pop", 0) or 0) / pop
+    # 0% unemp → 1.0×, 20%+ → 2.5× (capped). Linear in between.
+    return CAPEX_PAYBACK_TICKS * (1.0 + min(1.5, unemp_rate * 7.5))
+
+
+def _producer_margin(city: City, key: str) -> float:
+    meta = PRODUCER_BUILDINGS.get(key)
+    if meta is None:
+        return 0.0
+    out_good = meta.get("good")
+    in_good = meta.get("input_good")
+    out = float(meta.get("base_output", 0.0))
+    eff_good = meta.get("eff_good") or out_good
+    out *= float((getattr(city, "local_efficiency", None) or {}).get(eff_good, 1.0))
+
+    bonus = (getattr(city, "capacity_bonuses", None) or {}).get(key, {})
+    out *= 1.0 + float(bonus.get("mult", 0.0)) * 0.5
+
+    out_val = out * city.prices.get(out_good, BASE_PRICES.get(out_good, 1.0)) if out_good else 0.0
+    in_val = float(meta.get("input_per_level", 0.0)) * city.prices.get(in_good, BASE_PRICES.get(in_good, 1.0)) if in_good else 0.0
+    return out_val - in_val
+
+
+# ── Inverse price function (target-supply estimator) ─────────────────────────
+#
+# These constants must mirror the price curve in simulation._get_price.
+# Duplicated here to avoid a circular import (simulation imports city_dev).
+_PRICE_MULT_MIN = 0.03
+_PRICE_MULT_MAX = 20.0
+_PRICE_CURVE_STEEPNESS = 5.5
+_PRICE_CURVE_SPAN = _PRICE_MULT_MAX - _PRICE_MULT_MIN
+_PRICE_CURVE_ANCHOR = 1.0 + math.log(
+    (_PRICE_CURVE_SPAN / (1.0 - _PRICE_MULT_MIN)) - 1.0
+) / _PRICE_CURVE_STEEPNESS
+
+
+def _supply_at_price(good: str, demand: float, target_price: float) -> float:
+    """Inverse of the city price curve: supply level that yields ``target_price``.
+
+    Returns ``inf`` when any supply keeps the price above the target (i.e.
+    the building is unconditionally profitable), and ``0`` when the target
+    is above the maximum achievable price (never profitable). Used by the
+    ROI target estimator to project equilibrium output for each producer.
+    """
+    base = BASE_PRICES.get(good, 1.0)
+    if base <= 0.0 or demand <= 0.0:
+        return 0.0
+    m = target_price / base
+    if m >= _PRICE_MULT_MIN + _PRICE_CURVE_SPAN:
+        return 0.0
+    if m <= _PRICE_MULT_MIN:
+        return float("inf")
+    f = (m - _PRICE_MULT_MIN) / _PRICE_CURVE_SPAN
+    f = max(1e-9, min(1.0 - 1e-9, f))
+    ratio = _PRICE_CURVE_ANCHOR - math.log((1.0 - f) / f) / _PRICE_CURVE_STEEPNESS
+    if ratio <= 0.0:
+        return float("inf")
+    return demand / ratio
+
+
+# `city.effective_demand` is populated by the simulation loop prior to
+# calling the development estimator. If absent, fall back to `city.demand`.
+
+
+def _estimate_target_producer_levels(city: City) -> dict[str, int]:
+    """Closed-form target per producer building, based on pure ROI.
+
+    Algorithm (per output good Y):
+      1. For each producer X of Y, compute its break-even output price
+         ``p* = (cost_per_level / payback + input_cost) / output_per_level``.
+      2. Use the inverse price function to get the supply level ``s*`` at
+         which that producer's marginal level just breaks even.
+      3. Sort producers of Y by ROI per output unit (descending) and
+         allocate target supply in order — best-ROI fills first, lower-ROI
+         only fills the remaining gap. This avoids double-counting when
+         multiple producers share an output good.
+
+    O(P log P) per city, where P is the producer-building count (~12).
+    """
+    targets: dict[str, int] = {}
+    levels = getattr(city, "buildings", None) or {}
+    capacities = getattr(city, "capacities", None) or {}
+    shared = getattr(city, "shared_capacities", None) or {}
+    local_eff = getattr(city, "local_efficiency", None) or {}
+
+    by_good: dict[str, list[str]] = {}
+    for key, meta in PRODUCER_BUILDINGS.items():
+        good = meta.get("good")
+        if good:
+            by_good.setdefault(good, []).append(key)
+
+    payback = _effective_capex_payback(city)
+
+    for good, keys in by_good.items():
+        eff_dem = getattr(city, "effective_demand", None)
+        if eff_dem is not None:
+            demand_y = float(eff_dem.get(good, 0.0))
+        else:
+            demand_y = float(city.demand.get(good, 0.0))
+        if demand_y <= 0.0:
+            for k in keys:
+                targets[k] = int(levels.get(k, 0))
+            continue
+
+        # Per-producer ROI metrics.
+        info: list[tuple[str, float, float, float, int]] = []
+        for key in keys:
+            meta = PRODUCER_BUILDINGS[key]
+            q = float(meta.get("base_output", 0.0))
+            eff_key = meta.get("eff_good") or good
+            eff = float(local_eff.get(eff_key, 1.0))
+            q_eff = q * eff
+            cur = int(levels.get(key, 0))
+            if q_eff <= 0.0:
+                targets[key] = cur
+                continue
+            cost = _producer_upgrade_cost(city, key, cur)
+            in_good = meta.get("input_good")
+            in_per_lvl = float(meta.get("input_per_level", 0.0))
+            in_cost = in_per_lvl * float(BASE_PRICES.get(in_good, 1.0)) if in_good else 0.0
+            p_break = (cost / payback + in_cost) / q_eff
+            market_price = float(city.prices.get(good, BASE_PRICES.get(good, 1.0)))
+            roi_per_unit = market_price - p_break
+            info.append((key, q_eff, p_break, roi_per_unit, cur))
+
+        # Best ROI fills first.
+        info.sort(key=lambda x: -x[3])
+        accumulated = sum(q_eff * cur for _, q_eff, _, _, cur in info)
+
+        for key, q_eff, p_break, roi_per_unit, cur in info:
+            cap = int(capacities.get(key, 0))
+            if roi_per_unit <= 0.0:
+                # Not viable even at base price.
+                targets[key] = cur
+                continue
+            tgt_supply = _supply_at_price(good, demand_y, p_break)
+            if not math.isfinite(tgt_supply):
+                tgt = cap
+            else:
+                add = max(0.0, tgt_supply - accumulated) / q_eff
+                tgt = min(cap, cur + int(add))
+            targets[key] = max(cur, tgt)
+            accumulated += q_eff * (targets[key] - cur)
+
+    # Shared capacity pool: agri (farm + cotton_farm) compete for one cap.
+    agri_cap = int(shared.get("agri", 0))
+    if agri_cap > 0:
+        for member, other in (("farm", "cotton_farm"), ("cotton_farm", "farm")):
+            cur = int(levels.get(member, 0))
+            other_used = int(levels.get(other, 0))
+            allowed = max(0, agri_cap - other_used)
+            tgt = targets.get(member, cur)
+            targets[member] = min(tgt, allowed)
+    return targets
+
+
+def max_profitable_levels(
+    city: City, key: str, *, max_add: int | None = None,
+) -> int:
+    """Return how many additional levels of producer `key` would be
+    considered profitable at current market prices, capped by capacity,
+    available gold, and available unemployed labour.
+
+    This wraps the closed-form target estimator and then applies simple
+    affordability (gold) and labour gates to give a practical buildable
+    count that mirrors what the development loop would actually apply.
+    """
+    if key not in PRODUCER_BUILDINGS:
+        return 0
+
+    levels = getattr(city, "buildings", None) or {}
+    capacities = getattr(city, "capacities", None) or {}
+    shared = getattr(city, "shared_capacities", None) or {}
+
+    cur = int(levels.get(key, 0))
+    cap = int(capacities.get(key, 0))
+
+    # Respect shared agricultural pool for farm/cotton_farm
+    if key in ("farm", "cotton_farm"):
+        agri_cap = int(shared.get("agri", 0))
+        other = "cotton_farm" if key == "farm" else "farm"
+        other_used = int(levels.get(other, 0))
+        cap = min(cap, max(0, agri_cap - other_used))
+
+    targets = _estimate_target_producer_levels(city)
+    tgt = int(targets.get(key, cur))
+    allowed = max(0, min(tgt, cap) - cur)
+    if allowed <= 0:
+        return 0
+
+    # Affordability by gold: simulate buying sequential levels until funds exhausted
+    gold = float(getattr(city, "gold", 0.0) or 0.0)
+    affordable = 0
+    lvl = cur
+    while affordable < allowed:
+        cost = _producer_upgrade_cost(city, key, lvl)
+        if cost > gold:
+            break
+        gold -= cost
+        lvl += 1
+        affordable += 1
+
+    # Labour cap
+    unemployed = int(getattr(city, "unemployed_pop", 0) or 0)
+    labour_limit = unemployed // N_EMPLOYEES_PER_LEVEL
+
+    result = min(allowed, affordable, labour_limit)
+    if max_add is not None:
+        result = min(result, max_add)
+    return int(max(0, result))
+
+
+def _estimate_target_building_levels(city: City) -> dict[str, int]:
+    """Closed-form target per city-center building, based on pure ROI.
+
+    City buildings can have multiple inputs and outputs, so we attribute
+    the ROI to the dominant output good (highest current revenue share)
+    and use the inverse price function on that good. Other outputs are
+    treated as fixed-value bonuses at current prices.
+    """
+    targets: dict[str, int] = {}
+    blevels = getattr(city, "buildings", None) or {}
+    prices = getattr(city, "prices", None) or {}
+
+    for key, b in BUILDING_TYPES.items():
+        cur = int(blevels.get(key, 0))
+        if key == "trading_house":
+            trade_potential = float(getattr(city, "trade_potential", 0.0) or 0.0)
+            pop_fallback = float(getattr(city, "population", 0.0) or 0.0) * 0.15 + 4.0
+            target_volume = max(trade_potential, pop_fallback)
+            targets[key] = min(b.max_level, max(cur, int(math.ceil(target_volume / TRADE_HOUSE_CAPACITY_PER_EMPLOYEE))))
+            continue
+        if not b.outputs:
+            targets[key] = cur
+            continue
+        out_v = sum(amt * prices.get(g, BASE_PRICES.get(g, 1.0)) for g, amt in b.outputs.items())
+        in_v = sum(amt * prices.get(g, BASE_PRICES.get(g, 1.0)) for g, amt in b.inputs.items())
+        margin = out_v - in_v
+        cost = _building_upgrade_cost(city, key, cur)
+        if margin <= 0.0 or margin * BUILDING_PAYBACK_TICKS <= cost:
+            targets[key] = cur
+            continue
+
+        # Pick the dominant output (largest revenue contribution).
+        primary, _ = max(
+            (
+                (g, amt * prices.get(g, BASE_PRICES.get(g, 1.0)))
+                for g, amt in b.outputs.items()
+            ),
+            key=lambda x: x[1],
+        )
+        primary_q = float(b.outputs.get(primary, 0.0))
+        eff_dem = getattr(city, "effective_demand", None)
+        if eff_dem is not None:
+            demand_y = float(eff_dem.get(primary, 0.0))
+        else:
+            demand_y = float(city.demand.get(primary, 0.0))
+        if demand_y <= 0.0 or primary_q <= 0.0:
+            targets[key] = min(b.max_level, cur + 1)  # ROI-positive but no demand signal
+            continue
+
+        other_out_v = sum(
+            amt * prices.get(g, BASE_PRICES.get(g, 1.0))
+            for g, amt in b.outputs.items() if g != primary
+        )
+        # Net per level = primary_q * primary_p + other_out_v - in_v ≥ cost / payback.
+        p_break = (cost / BUILDING_PAYBACK_TICKS + in_v - other_out_v) / primary_q
+        if p_break <= 0.0:
+            targets[key] = b.max_level
+            continue
+        tgt_supply = _supply_at_price(primary, demand_y, p_break)
+        if not math.isfinite(tgt_supply):
+            targets[key] = b.max_level
+        else:
+            other_supply = max(0.0, float(city.supply.get(primary, 0.0)) - primary_q * cur)
+            add = max(0.0, tgt_supply - other_supply) / primary_q
+            targets[key] = min(b.max_level, cur + int(add))
+    return targets
+
+
+def _has_capacity_for_next_level(city: City, key: str) -> bool:
+    levels = getattr(city, "buildings", None) or {}
+    capacities = getattr(city, "capacities", None) or {}
+    shared = getattr(city, "shared_capacities", None) or {}
+
+    cur = int(levels.get(key, 0))
+    cap = int(capacities.get(key, 0))
+    if cur >= cap:
+        return False
+
+    if key in ("farm", "cotton_farm"):
+        agri_cap = int(shared.get("agri", 0))
+        agri_used = int(levels.get("farm", 0)) + int(levels.get("cotton_farm", 0))
+        if agri_used >= agri_cap:
+            return False
+
+    return True
 
 
 def _develop_tiles(
@@ -780,26 +1092,24 @@ def _develop_tiles(
     ter: list, res: dict, rivers: dict, om: list,
     *, good_efficiency: dict | None = None,
 ) -> bool:
-    """Greedy unified development loop.
+    """Greedy unified development loop, pure ROI.
 
     Prices/efficiencies/terrain are stable during one call, so we precompute
     the (profit, good, kind) tuple per (tile, candidate) once and re-score
     cheaply each iteration — dropping the hot ``_tile_profit`` path from
     O(K × T × 6) to O(T × 6) + O(K × T).
 
-    Each entry list mutates in place after an action:
-      * build  → cell's list becomes at most one upgrade entry at lvl 1
-      * upgrade → entry's lvl bumps; list drops when max_level hits
-
-    Gates preserved: unemployment for builds, unstaffed cap for upgrades,
-    per-tile upgrade cap. Saturation and need are applied at scan time.
+    Gates: unemployment for builds, unstaffed cap for upgrades, per-tile
+    upgrade cap. ``build_type`` is preserved for caller compatibility but
+    no longer biases scoring.
     """
+    del build_type  # decisions are purely ROI now
+
     remaining_unemployed = int(getattr(city, "unemployed_pop", 0))
     built_by_good: dict[str, int] = {}
     upgrades_this_call: dict[int, int] = {}
     any_action = False
     staffing = getattr(city, "staffing", None) or {}
-    payback = CAPEX_PAYBACK_TICKS * _slack_payback_mult(city)
 
     # Precompute valid candidates per tile. Entry layout:
     # [imp_type, kind ('build'|'upgrade'), profit, good, lvl]
@@ -826,9 +1136,6 @@ def _develop_tiles(
         if entries:
             tile_entries[cell] = entries
 
-    # Cache need multipliers per good — prices stable during call.
-    need_cache: dict[Optional[str], float] = {}
-
     while tile_entries:
         best_score = 0.0
         best_cell = -1
@@ -843,28 +1150,21 @@ def _develop_tiles(
                     if remaining_unemployed < N_EMPLOYEES_PER_LEVEL:
                         continue
                     capex = _upgrade_cost(city, imp_t, 0)
-                    base = profit - capex / payback
+                    base = profit - capex / CAPEX_PAYBACK_TICKS
                 else:
-                    if tile_up_count >= _MAX_UPGRADES_PER_TILE_PER_CALL:
-                        continue
+                    # Allow stacking multiple upgrades on a single tile in one
+                    # call (no artificial per-tile cap). Still respect staffing
+                    # and labour availability checks below when necessary.
                     unstaffed = lvl - staffed
-                    if unstaffed > _MAX_UNSTAFFED_FOR_UPGRADE:
-                        continue
                     if remaining_unemployed < N_EMPLOYEES_PER_LEVEL and unstaffed >= 1:
                         continue
                     cost = _upgrade_cost(city, imp_t, lvl)
-                    base = profit - cost / payback
+                    base = profit - cost / CAPEX_PAYBACK_TICKS
                 if base <= 0:
                     continue
 
-                if good in need_cache:
-                    need = need_cache[good]
-                else:
-                    need = _need_multiplier(city, good)
-                    need_cache[good] = need
-                sat = _SATURATION_DECAY ** built_by_good.get(good, 0) if good else 1.0
-                goal = _GOAL_PREFERENCE_BONUS if build_type == imp_t else 1.0
-                score = base * need * sat * goal
+                # Pure ROI: no need/saturation/goal multipliers.
+                score = base
                 if score > best_score:
                     best_score = score
                     best_cell = cell
@@ -913,25 +1213,37 @@ def _try_one_action(
     ter: list, res: dict, rivers: dict, om: list,
     *, build_type: Optional[int] = None, good_efficiency: dict | None = None,
 ) -> bool:
-    """Run one investment action for this city.
+    """Run one producer-building investment action for this city.
 
-    The unified ``_develop_tiles`` loop handles builds + upgrades under a
-    single market-weighted score. Falls through to fort placement (which
-    has its own border-biased logic) when the goal is FORT, and to a tile
-    rebuild if nothing else scored positive.
+    Pure ROI: pick the highest-score underbuilt producer and add a level.
+    The ``build_type`` argument is preserved for caller compatibility but
+    no longer biases the score.
     """
-    if build_type is None:
-        build_type = _pick_build_type(city, goal_imp, impr)
+    del build_type  # decisions are purely ROI now
 
-    if _develop_tiles(city, civ, build_type, impr, ter, res, rivers, om,
-                      good_efficiency=good_efficiency):
-        return True
+    best_key: Optional[str] = None
+    best_score = 0.0
+    for key in PRODUCER_BUILDINGS.keys():
+        if not _has_capacity_for_next_level(city, key):
+            continue
+        cur_lvl = int((city.buildings or {}).get(key, 0))
+        margin = _producer_margin(city, key)
+        cost = _producer_upgrade_cost(city, key, cur_lvl)
+        score = margin - (cost / CAPEX_PAYBACK_TICKS)
+        if score > best_score:
+            best_score = score
+            best_key = key
 
-    if build_type == IMP.FORT and civ is not None:
-        if _place_fort(city, civ, ter, impr, set(city.tiles), set(), om or []):
-            return True
+    if best_key is None or best_score <= 0.0:
+        return False
 
-    return _rebuild_improvement(city, ter, res, rivers, impr, good_efficiency)
+    cur_lvl = int((city.buildings or {}).get(best_key, 0))
+    cost = _producer_upgrade_cost(city, best_key, cur_lvl)
+    if not _try_buy(city, cost):
+        return False
+
+    city.buildings[best_key] = cur_lvl + 1
+    return True
 
 
 def tick_city_development(
@@ -955,11 +1267,11 @@ def tick_city_development(
     civ.goal_ticks += 1
 
     goal_map = {
-        "FARM":     IMP.FARM,
-        "MINE":     IMP.MINE,
-        "LUMBER":   IMP.LUMBER,
-        "QUARRY":   IMP.QUARRY,
-        "FORT":     IMP.FORT,
+        "FARM": "farm",
+        "MINE": "copper_mine",
+        "LUMBER": "lumber_camp",
+        "QUARRY": "quarry",
+        "FORT": None,
     }
 
     if civ.goal_index >= len(civ.goal_queue):
@@ -967,7 +1279,7 @@ def tick_city_development(
     current_goal = civ.goal_queue[civ.goal_index]
 
     # Goal expiration — nothing fulfilled in 300 ticks, move on.
-    if civ.goal_ticks > 300:
+    if civ.goal_ticks > 60:
         civ.goal_index = (civ.goal_index + 1) % len(civ.goal_queue)
         civ.goal_ticks = 0
         return
@@ -976,7 +1288,7 @@ def tick_city_development(
     # let cities build production. The old code froze the whole civ, which
     # left new cities stuck at 40 pop with no buildings while the civ saved
     # for another settle. Cities still need farms to grow.
-    goal_imp = goal_map.get(current_goal)  # None for FOUND
+    goal_producer = goal_map.get(current_goal)  # None for FOUND/FORT
 
     city_count = len(civ.cities)
 
@@ -984,11 +1296,11 @@ def tick_city_development(
     # sublinearly with city count.
     stride = 1
     if city_count >= 240:
-        stride = 4
+        stride = 1
     elif city_count >= 160:
-        stride = 3
+        stride = 1
     elif city_count >= 96:
-        stride = 2
+        stride = 1
 
     if stride > 1:
         cursor = getattr(civ, "_invest_cursor", 0) % stride
@@ -1000,17 +1312,14 @@ def tick_city_development(
     any_built = False
     changed_cities: dict[int, City] = {}
     for city in city_iter:
-        city_build_type = _pick_build_type(city, goal_imp, impr)
-        if _try_one_action(
-            city, civ, goal_imp, impr, ter, res, rivers, om,
-            build_type=city_build_type, good_efficiency=good_efficiency,
-        ):
+        # Producer building investment
+        if _develop_producer_buildings(city, civ, goal_producer=goal_producer):
             any_built = True
             changed_cities[city.cell] = city
 
         # City-center buildings (factories etc.) invest off market signals.
-        # Separate from tile improvements so we can grow urban industry.
-        if _try_build_city_buildings(city):
+        # Separate from producer buildings so we can grow urban industry.
+        if _try_build_city_buildings(city, impr):
             any_built = True
             changed_cities[city.cell] = city
 
@@ -1018,9 +1327,13 @@ def tick_city_development(
     # Without this, new cells wait a whole tick before producing.
     for city in changed_cities.values():
         employment.update_city_employment(city, impr)
+        pop = max(1.0, float(getattr(city, "population", 0.0)))
+        city.workforce = int(pop)
+        city.employed_pop = int(getattr(city, "employee_level_count", 0)) * N_EMPLOYEES_PER_LEVEL
+        city.unemployed_pop = max(0, city.workforce - city.employed_pop)
 
     # Advance the civ goal when SOMEONE built this tick (keeps the queue
     # from stalling but doesn't gate per-city work on it).
-    if any_built and goal_imp is not None:
+    if any_built and goal_producer is not None:
         civ.goal_index = (civ.goal_index + 1) % len(civ.goal_queue)
         civ.goal_ticks = 0
