@@ -691,7 +691,7 @@ export default function CivSim() {
             onMouseDown={e => { setDrag(true); setDs({ x: e.clientX, y: e.clientY }); }}
             onMouseUp={() => setDrag(false)} onMouseLeave={() => { setDrag(false); setHover(null); }} />
           {hover && (
-            <div style={{ position: "absolute", top: 5, left: 5, background: "rgba(13,17,23,.95)", border: "1px solid #30363d", borderRadius: 4, padding: "4px 7px", fontSize: 8, pointerEvents: "none", lineHeight: 1.6, minWidth: 110 }}>
+            <div style={{ position: "absolute", top: 5, left: 5, background: "rgba(13,17,23,.95)", border: "1px solid #30363d", borderRadius: 4, padding: "4px 11px", fontSize: 8, pointerEvents: "none", lineHeight: 1.6, minWidth: 110 }}>
               <div style={{ color: "#6e7681" }}>({hover.x},{hover.y}) {hover.terrain} {hover.alt}m</div>
               {hover.river && <div style={{ color: "#4aaef0" }}>〰 River</div>}
               {hover.coastal && <div style={{ color: "#1a6a9e" }}>⚓ Coastal</div>}

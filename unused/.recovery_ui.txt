@@ -1207,7 +1207,7 @@ function showTooltip(x, y, info) {
         if (c.coastal) tags.push("⚓ Coast");
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
-        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
+        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:12px">${tags.join(" · ")}</div>`);
         lines.push(`<div>Pop: ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
         lines.push(`<div style="color:#8b949e">🍞 Food ${c.food} · 💰 Wealth ${c.wealth}</div>`);
         lines.push(`<div style="color:#8b949e">📦 Trade ${c.trade} (potential ${c.trade_potential}, roads +${c.road_trade})</div>`);
@@ -1486,7 +1486,7 @@ function showTooltip(x, y, info) {
         if (c.coastal) tags.push("⚓ Coast");
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
-        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
+        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:12px">${tags.join(" · ")}</div>`);
         lines.push(`<div>Pop: ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
         lines.push(`<div style="color:#8b949e">🍞 Food ${c.food} · 💰 Wealth ${c.wealth}</div>`);
         lines.push(`<div style="color:#8b949e">📦 Trade ${c.trade} (potential ${c.trade_potential}, roads +${c.road_trade})</div>`);
@@ -1724,7 +1724,7 @@ function showTooltip(x, y, info) {
         if (c.coastal) tags.push("⚓ Coast");
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
-        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
+        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:12px">${tags.join(" · ")}</div>`);
         lines.push(`<div>Pop: ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
         lines.push(`<div style="color:#8b949e">🍞 Food ${c.food} · 💰 Wealth ${c.wealth}</div>`);
         lines.push(`<div style="color:#8b949e">📦 Trade ${c.trade} (potential ${c.trade_potential}, roads +${c.road_trade})</div>`);
@@ -2182,7 +2182,7 @@ function showTooltip(x, y, info) {
         if (c.coastal) tags.push("⚓ Coast");
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
-        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
+        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:12px">${tags.join(" · ")}</div>`);
         lines.push(`<div>Pop: ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
         lines.push(`<div style="color:#8b949e">🍞 Food ${c.food} · 💰 Wealth ${c.wealth}</div>`);
         lines.push(`<div style="color:#8b949e">📦 Trade ${c.trade} (potential ${c.trade_potential}, roads +${c.road_trade})</div>`);
@@ -2645,7 +2645,7 @@ function showTooltip(x, y, info) {
         if (c.coastal) tags.push("⚓ Coast");
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
-        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
+        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:12px">${tags.join(" · ")}</div>`);
         lines.push(`<div>Pop: ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
         lines.push(`<div style="color:#8b949e">🍞 Food ${c.food} · 💰 Wealth ${c.wealth}</div>`);
         lines.push(`<div style="color:#8b949e">📦 Trade ${c.trade} (potential ${c.trade_potential}, roads +${c.road_trade})</div>`);
@@ -2798,14 +2798,14 @@ replace_all=False
 
             lines.push(`<div style="margin-top:6px;border-top:1px solid #30363d;padding-top:4px">`);
             lines.push(`<div style="font-weight:600">⚔ ${a.commander}</div>`);
-            lines.push(`<div style="color:${a.owner_color};font-size:9px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
+            lines.push(`<div style="color:${a.owner_color};font-size:12px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
             lines.push(`<div style="color:${bColor};font-size:10px">${bLabel}</div>`);
             if (a.target_name) {
-                lines.push(`<div style="color:#8b949e;font-size:9px">→ ${a.target_name}</div>`);
+                lines.push(`<div style="color:#8b949e;font-size:12px">→ ${a.target_name}</div>`);
             }
             lines.push(`<div style="color:#8b949e">Strength: <span style="color:${sColor}">${a.strength.toFixed(0)}/${a.max_strength.toFixed(0)}</span></div>`);
             lines.push(`<div style="color:#8b949e">Organization: <span style="color:${oColor}">${a.organization.toFixed(0)}%</span> · Supply: <span style="color:${supColor}">${a.supply.toFixed(0)}%</span></div>`);
-            lines.push(`<div style="color:#8b949e;font-size:9px">Skill ×${a.skill.toFixed(2)}</div>`);
+            lines.push(`<div style="color:#8b949e;font-size:12px">Skill ×${a.skill.toFixed(2)}</div>`);
             lines.push(`</div>`);
         }
     }
@@ -2880,7 +2880,7 @@ file_path=c:/Users/brian/.vscode/2026projects/civ_simulator/frontend/ui.js
 
             lines.push(`<div style="margin-top:6px;border-top:1px solid #30363d;padding-top:4px">`);
             lines.push(`<div style="font-weight:600">⚔ ${a.commander}</div>`);
-            lines.push(`<div style="color:${a.owner_color};font-size:9px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
+            lines.push(`<div style="color:${a.owner_color};font-size:12px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
 --- END READ RESULT ---
 
 ########## EVENT #67 ##########
@@ -3280,7 +3280,7 @@ function showTooltip(x, y, info) {
         if (c.coastal) tags.push("⚓ Coast");
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
-        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
+        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:12px">${tags.join(" · ")}</div>`);
         lines.push(`<div>Pop: ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
         lines.push(`<div style="color:#8b949e">🍞 Food ${c.food} · 💰 Wealth ${c.wealth}</div>`);
         lines.push(`<div style="color:#8b949e">📦 Trade ${c.trade} (potential ${c.trade_potential}, roads +${c.road_trade})</div>`);
@@ -3337,14 +3337,14 @@ function showTooltip(x, y, info) {
 
             lines.push(`<div style="margin-top:6px;border-top:1px solid #30363d;padding-top:4px">`);
             lines.push(`<div style="font-weight:600">⚔ ${a.commander}</div>`);
-            lines.push(`<div style="color:${a.owner_color};font-size:9px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
+            lines.push(`<div style="color:${a.owner_color};font-size:12px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
             lines.push(`<div style="color:${bColor};font-size:10px">${bLabel}</div>`);
             if (a.target_name) {
-                lines.push(`<div style="color:#8b949e;font-size:9px">→ ${a.target_name}</div>`);
+                lines.push(`<div style="color:#8b949e;font-size:12px">→ ${a.target_name}</div>`);
             }
             lines.push(`<div style="color:#8b949e">Strength: <span style="color:${sColor}">${a.strength.toFixed(0)}/${a.max_strength.toFixed(0)}</span></div>`);
             lines.push(`<div style="color:#8b949e">Organization: <span style="color:${oColor}">${a.organization.toFixed(0)}%</span> · Supply: <span style="color:${supColor}">${a.supply.toFixed(0)}%</span></div>`);
-            lines.push(`<div style="color:#8b949e;font-size:9px">Skill ×${a.skill.toFixed(2)}</div>`);
+            lines.push(`<div style="color:#8b949e;font-size:12px">Skill ×${a.skill.toFixed(2)}</div>`);
             lines.push(`</div>`);
         }
     }
@@ -3784,7 +3784,7 @@ function showTooltip(x, y, info) {
         if (c.coastal) tags.push("⚓ Coast");
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
-        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
+        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:12px">${tags.join(" · ")}</div>`);
         lines.push(`<div>Pop: ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
         lines.push(`<div style="color:#8b949e">🍞 Food ${c.food} · 💰 Wealth ${c.wealth}</div>`);
         lines.push(`<div style="color:#8b949e">📦 Trade ${c.trade} (potential ${c.trade_potential}, roads +${c.road_trade})</div>`);
@@ -3841,14 +3841,14 @@ function showTooltip(x, y, info) {
 
             lines.push(`<div style="margin-top:6px;border-top:1px solid #30363d;padding-top:4px">`);
             lines.push(`<div style="font-weight:600">⚔ ${a.commander}</div>`);
-            lines.push(`<div style="color:${a.owner_color};font-size:9px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
+            lines.push(`<div style="color:${a.owner_color};font-size:12px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
             lines.push(`<div style="color:${bColor};font-size:10px">${bLabel}</div>`);
             if (a.target_name) {
-                lines.push(`<div style="color:#8b949e;font-size:9px">→ ${a.target_name}</div>`);
+                lines.push(`<div style="color:#8b949e;font-size:12px">→ ${a.target_name}</div>`);
             }
             lines.push(`<div style="color:#8b949e">Strength: <span style="color:${sColor}">${a.strength.toFixed(0)}/${a.max_strength.toFixed(0)}</span></div>`);
             lines.push(`<div style="color:#8b949e">Organization: <span style="color:${oColor}">${a.organization.toFixed(0)}%</span> · Supply: <span style="color:${supColor}">${a.supply.toFixed(0)}%</span></div>`);
-            lines.push(`<div style="color:#8b949e;font-size:9px">Skill ×${a.skill.toFixed(2)}</div>`);
+            lines.push(`<div style="color:#8b949e;font-size:12px">Skill ×${a.skill.toFixed(2)}</div>`);
             lines.push(`</div>`);
         }
     }
@@ -4288,7 +4288,7 @@ function showTooltip(x, y, info) {
         if (c.coastal) tags.push("⚓ Coast");
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
-        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
+        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:12px">${tags.join(" · ")}</div>`);
         lines.push(`<div>Pop: ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
         lines.push(`<div style="color:#8b949e">🍞 Food ${c.food} · 💰 Wealth ${c.wealth}</div>`);
         lines.push(`<div style="color:#8b949e">📦 Trade ${c.trade} (potential ${c.trade_potential}, roads +${c.road_trade})</div>`);
@@ -4345,14 +4345,14 @@ function showTooltip(x, y, info) {
 
             lines.push(`<div style="margin-top:6px;border-top:1px solid #30363d;padding-top:4px">`);
             lines.push(`<div style="font-weight:600">⚔ ${a.commander}</div>`);
-            lines.push(`<div style="color:${a.owner_color};font-size:9px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
+            lines.push(`<div style="color:${a.owner_color};font-size:12px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
             lines.push(`<div style="color:${bColor};font-size:10px">${bLabel}</div>`);
             if (a.target_name) {
-                lines.push(`<div style="color:#8b949e;font-size:9px">→ ${a.target_name}</div>`);
+                lines.push(`<div style="color:#8b949e;font-size:12px">→ ${a.target_name}</div>`);
             }
             lines.push(`<div style="color:#8b949e">Strength: <span style="color:${sColor}">${a.strength.toFixed(0)}/${a.max_strength.toFixed(0)}</span></div>`);
             lines.push(`<div style="color:#8b949e">Organization: <span style="color:${oColor}">${a.organization.toFixed(0)}%</span> · Supply: <span style="color:${supColor}">${a.supply.toFixed(0)}%</span></div>`);
-            lines.push(`<div style="color:#8b949e;font-size:9px">Skill ×${a.skill.toFixed(2)}</div>`);
+            lines.push(`<div style="color:#8b949e;font-size:12px">Skill ×${a.skill.toFixed(2)}</div>`);
             lines.push(`</div>`);
         }
     }
@@ -4461,7 +4461,7 @@ function showTooltip(x, y, info) {
         if (c.coastal) tags.push("⚓ Coast");
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
-        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
+        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:12px">${tags.join(" · ")}</div>`);
         lines.push(`<div>Pop: ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
         lines.push(`<div style="color:#8b949e">🍞 Food ${c.food} · 💰 Wealth ${c.wealth}</div>`);
         lines.push(`<div style="color:#8b949e">📦 Trade ${c.trade} (potential ${c.trade_potential}, roads +${c.road_trade})</div>`);
@@ -4518,14 +4518,14 @@ function showTooltip(x, y, info) {
 
             lines.push(`<div style="margin-top:6px;border-top:1px solid #30363d;padding-top:4px">`);
             lines.push(`<div style="font-weight:600">⚔ ${a.commander}</div>`);
-            lines.push(`<div style="color:${a.owner_color};font-size:9px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
+            lines.push(`<div style="color:${a.owner_color};font-size:12px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
             lines.push(`<div style="color:${bColor};font-size:10px">${bLabel}</div>`);
             if (a.target_name) {
-                lines.push(`<div style="color:#8b949e;font-size:9px">→ ${a.target_name}</div>`);
+                lines.push(`<div style="color:#8b949e;font-size:12px">→ ${a.target_name}</div>`);
             }
             lines.push(`<div style="color:#8b949e">Strength: <span style="color:${sColor}">${a.strength.toFixed(0)}/${a.max_strength.toFixed(0)}</span></div>`);
             lines.push(`<div style="color:#8b949e">Organization: <span style="color:${oColor}">${a.organization.toFixed(0)}%</span> · Supply: <span style="color:${supColor}">${a.supply.toFixed(0)}%</span></div>`);
-            lines.push(`<div style="color:#8b949e;font-size:9px">Skill ×${a.skill.toFixed(2)}</div>`);
+            lines.push(`<div style="color:#8b949e;font-size:12px">Skill ×${a.skill.toFixed(2)}</div>`);
             lines.push(`</div>`);
         }
     }
@@ -4554,7 +4554,7 @@ function showTooltip(x, y, info) {
         if (c.coastal) tags.push("⚓ Coast");
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
-        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
+        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:12px">${tags.join(" · ")}</div>`);
         lines.push(`<div>👥 Pop ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
         lines.push(`<div style="color:#8b949e">🍞 Food ${c.food} · 💰 Wealth ${c.wealth}</div>`);
         lines.push(`<div style="color:#8b949e">📦 Trade ${c.trade} (potential ${c.trade_potential}, roads +${c.road_trade})</div>`);
@@ -4619,19 +4619,19 @@ function showTooltip(x, y, info) {
 
             lines.push(`<div style="margin-top:6px;border-top:1px solid #30363d;padding-top:4px">`);
             lines.push(`<div style="font-weight:600">⚔ ${a.commander}</div>`);
-            lines.push(`<div style="color:${a.owner_color};font-size:9px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
+            lines.push(`<div style="color:${a.owner_color};font-size:12px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
             lines.push(`<div style="color:${bColor};font-size:10px">${bLabel}</div>`);
             if (a.target_name) {
-                lines.push(`<div style="color:#8b949e;font-size:9px">→ ${a.target_name}</div>`);
+                lines.push(`<div style="color:#8b949e;font-size:12px">→ ${a.target_name}</div>`);
             }
             lines.push(`<div style="color:#8b949e">💪 Strength: <span style="color:${sColor}">${a.strength.toFixed(0)}/${a.max_strength.toFixed(0)}</span></div>`);
             lines.push(`<div style="color:#8b949e">🎯 Organization: <span style="color:${oColor}">${a.organization.toFixed(0)}%</span> · 🍖 Supply: <span style="color:${supColor}">${a.supply.toFixed(0)}%</span></div>`);
             if (fortPct > 0) {
-                lines.push(`<div style="color:#8b949e">🏯 Fortification: <span style="color:${fortColor}">+${fortPct}%</span> <span style="font-size:9px">(${a.fort_source || "open field"})</span></div>`);
+                lines.push(`<div style="color:#8b949e">🏯 Fortification: <span style="color:${fortColor}">+${fortPct}%</span> <span style="font-size:12px">(${a.fort_source || "open field"})</span></div>`);
             } else {
-                lines.push(`<div style="color:#8b949e;font-size:9px">🏯 Open field (no fortification)</div>`);
+                lines.push(`<div style="color:#8b949e;font-size:12px">🏯 Open field (no fortification)</div>`);
             }
-            lines.push(`<div style="color:#8b949e;font-size:9px">⭐ Skill ×${a.skill.toFixed(2)}</div>`);
+            lines.push(`<div style="color:#8b949e;font-size:12px">⭐ Skill ×${a.skill.toFixed(2)}</div>`);
             lines.push(`</div>`);
         }
     }
@@ -5001,7 +5001,7 @@ function showTooltip(x, y, info) {
         if (c.coastal) tags.push("⚓ Coast");
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
-        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
+        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:12px">${tags.join(" · ")}</div>`);
         lines.push(`<div>👥 Pop ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
         lines.push(`<div style="color:#8b949e">🍞 Food ${c.food} · 💰 Wealth ${c.wealth}</div>`);
         lines.push(`<div style="color:#8b949e">📦 Trade ${c.trade} (potential ${c.trade_potential}, roads +${c.road_trade})</div>`);
@@ -5066,19 +5066,19 @@ function showTooltip(x, y, info) {
 
             lines.push(`<div style="margin-top:6px;border-top:1px solid #30363d;padding-top:4px">`);
             lines.push(`<div style="font-weight:600">⚔ ${a.commander}</div>`);
-            lines.push(`<div style="color:${a.owner_color};font-size:9px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
+            lines.push(`<div style="color:${a.owner_color};font-size:12px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
             lines.push(`<div style="color:${bColor};font-size:10px">${bLabel}</div>`);
             if (a.target_name) {
-                lines.push(`<div style="color:#8b949e;font-size:9px">→ ${a.target_name}</div>`);
+                lines.push(`<div style="color:#8b949e;font-size:12px">→ ${a.target_name}</div>`);
             }
             lines.push(`<div style="color:#8b949e">💪 Strength: <span style="color:${sColor}">${a.strength.toFixed(0)}/${a.max_strength.toFixed(0)}</span></div>`);
             lines.push(`<div style="color:#8b949e">🎯 Organization: <span style="color:${oColor}">${a.organization.toFixed(0)}%</span> · 🍖 Supply: <span style="color:${supColor}">${a.supply.toFixed(0)}%</span></div>`);
             if (fortPct > 0) {
-                lines.push(`<div style="color:#8b949e">🏯 Fortification: <span style="color:${fortColor}">+${fortPct}%</span> <span style="font-size:9px">(${a.fort_source || "open field"})</span></div>`);
+                lines.push(`<div style="color:#8b949e">🏯 Fortification: <span style="color:${fortColor}">+${fortPct}%</span> <span style="font-size:12px">(${a.fort_source || "open field"})</span></div>`);
             } else {
-                lines.push(`<div style="color:#8b949e;font-size:9px">🏯 Open field (no fortification)</div>`);
+                lines.push(`<div style="color:#8b949e;font-size:12px">🏯 Open field (no fortification)</div>`);
             }
-            lines.push(`<div style="color:#8b949e;font-size:9px">⭐ Skill ×${a.skill.toFixed(2)}</div>`);
+            lines.push(`<div style="color:#8b949e;font-size:12px">⭐ Skill ×${a.skill.toFixed(2)}</div>`);
             lines.push(`</div>`);
         }
     }
@@ -5336,9 +5336,9 @@ function renderDiploScreen() {
                 <span style="color:#8b949e">vs</span>
                 <span class="war-name" style="color:${dfn.color}">${dfn.name}</span>
                 <span class="war-role def">Defender</span>
-                <span style="color:#6e7681;font-size:9px">· ${dur}yr</span>
+                <span style="color:#6e7681;font-size:12px">· ${dur}yr</span>
             </div>
-            <div style="display:grid;grid-template-columns:90px 1fr;gap:2px 8px;font-size:9px;color:#8b949e">
+            <div style="display:grid;grid-template-columns:90px 1fr;gap:2px 8px;font-size:12px;color:#8b949e">
                 <div>${att.name}</div>
                 <div>Conf ${(confA*100)|0}% · Exh ${(exhA*100)|0}% ${moraleBar(confA, exhA, att.color)}</div>
                 <div>${dfn.name}</div>
@@ -5733,9 +5733,9 @@ function renderDiploScreen() {
                 <span style="color:#8b949e">vs</span>
                 <span class="war-name" style="color:${dfn.color}">${dfn.name}</span>
                 <span class="war-role def">Defender</span>
-                <span style="color:#6e7681;font-size:9px">· ${dur}yr</span>
+                <span style="color:#6e7681;font-size:12px">· ${dur}yr</span>
             </div>
-            <div style="display:grid;grid-template-columns:90px 1fr;gap:2px 8px;font-size:9px;color:#8b949e">
+            <div style="display:grid;grid-template-columns:90px 1fr;gap:2px 8px;font-size:12px;color:#8b949e">
                 <div>${att.name}</div>
                 <div>Conf ${(confA*100)|0}% · Exh ${(exhA*100)|0}% ${moraleBar(confA, exhA, att.color)}</div>
                 <div>${dfn.name}</div>
@@ -5848,7 +5848,7 @@ function showTooltip(x, y, info) {
         if (c.coastal) tags.push("⚓ Coast");
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
-        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
+        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:12px">${tags.join(" · ")}</div>`);
         lines.push(`<div>👥 Pop ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
         lines.push(`<div style="color:#8b949e">🍞 Food ${c.food} · 💰 Wealth ${c.wealth}</div>`);
         lines.push(`<div style="color:#8b949e">📦 Trade ${c.trade} (potential ${c.trade_potential}, roads +${c.road_trade})</div>`);
@@ -5913,19 +5913,19 @@ function showTooltip(x, y, info) {
 
             lines.push(`<div style="margin-top:6px;border-top:1px solid #30363d;padding-top:4px">`);
             lines.push(`<div style="font-weight:600">⚔ ${a.commander}</div>`);
-            lines.push(`<div style="color:${a.owner_color};font-size:9px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
+            lines.push(`<div style="color:${a.owner_color};font-size:12px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
             lines.push(`<div style="color:${bColor};font-size:10px">${bLabel}</div>`);
             if (a.target_name) {
-                lines.push(`<div style="color:#8b949e;font-size:9px">→ ${a.target_name}</div>`);
+                lines.push(`<div style="color:#8b949e;font-size:12px">→ ${a.target_name}</div>`);
             }
             lines.push(`<div style="color:#8b949e">💪 Strength: <span style="color:${sColor}">${a.strength.toFixed(0)}/${a.max_strength.toFixed(0)}</span></div>`);
             lines.push(`<div style="color:#8b949e">🎯 Organization: <span style="color:${oColor}">${a.organization.toFixed(0)}%</span> · 🍖 Supply: <span style="color:${supColor}">${a.supply.toFixed(0)}%</span></div>`);
             if (fortPct > 0) {
-                lines.push(`<div style="color:#8b949e">🏯 Fortification: <span style="color:${fortColor}">+${fortPct}%</span> <span style="font-size:9px">(${a.fort_source || "open field"})</span></div>`);
+                lines.push(`<div style="color:#8b949e">🏯 Fortification: <span style="color:${fortColor}">+${fortPct}%</span> <span style="font-size:12px">(${a.fort_source || "open field"})</span></div>`);
             } else {
-                lines.push(`<div style="color:#8b949e;font-size:9px">🏯 Open field (no fortification)</div>`);
+                lines.push(`<div style="color:#8b949e;font-size:12px">🏯 Open field (no fortification)</div>`);
             }
-            lines.push(`<div style="color:#8b949e;font-size:9px">⭐ Skill ×${a.skill.toFixed(2)}</div>`);
+            lines.push(`<div style="color:#8b949e;font-size:12px">⭐ Skill ×${a.skill.toFixed(2)}</div>`);
             lines.push(`</div>`);
         }
     }

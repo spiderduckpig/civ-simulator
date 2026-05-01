@@ -232,7 +232,7 @@ def compute_tile_capacity(
         "fishery": max(0, int(round(coastal_factor * (6 + 10 * grain_eff + (12 if r == "fish" else 0))))),
         "lumber_camp": max(0, int(round(0 + 6 * woodland + (10 if r == "wood" else 0)))),
         "quarry": max(0, int(round(0 + 4 * rugged + (12 if r == "stone" else 0)))),
-        "copper_mine": max(0, int(round(0 + 0 * rugged + (8 if r == "gold" else 0) + 6 * copper_eff))),
+        "copper_mine": max(0, int(round(0 + 0 * rugged + (8 if r == "gold" else 0) + 3 * copper_eff))),
         "iron_mine": max(0, int(round((8 + 0.0 * rugged + 12 * iron_eff) if r == "iron" else (1 + 2.5 * rugged * max(0.0, iron_eff - 0.9))))),
         "port": max(0, int(round(coastal_factor * (5 + 9 * (0.5 + 0.5 * grain_eff))))),
         "pasture": max(0, int(round((0 + 2 * fertile + 4 * openness)))),

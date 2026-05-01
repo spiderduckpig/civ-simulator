@@ -3,76 +3,159 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>⚔ CIVITAS</title>
+  <title>Civ Simulator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Crimson+Pro:ital,wght@0,400;0,600;1,400&family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
+    /* ── Theme variables ───────────────────────────────────────────── */
+    :root, [data-theme="inkwell"] {
+      --bg-0:    #0c0804;
+      --bg-1:    #19120a;
+      --bg-2:    #211810;
+      --bg-3:    #1d1510;
+      --bd-1:    #4a3822;
+      --bd-2:    #2e2018;
+      --tx-1:    #e4cfab;
+      --tx-2:    #9a7c52;
+      --tx-3:    #a5855a;
+      --ac-gold: #c89528;
+      --ac-red:  #c24018;
+      --ac-grn:  #5a9038;
+      --ac-blue: #4898c8;
+      --ac-pur:  #9060b8;
+      --tt-bg:   rgba(14,9,4,.97);
+      --tt-bd:   #5a4228;
+      --map-bg:  #0c0804;
+      --zbtn-bg: rgba(25,18,10,.92);
+      --scrollbar: #4a3822;
+    }
+    [data-theme="parchment"] {
+      --bg-0:    #ccc0a0;
+      --bg-1:    #f4e8cc;
+      --bg-2:    #e8d8a8;
+      --bg-3:    #eedd bb;
+      --bd-1:    #b0904c;
+      --bd-2:    #ccb870;
+      --tx-1:    #2a1808;
+      --tx-2:    #6a4818;
+      --tx-3:    #9a7838;
+      --ac-gold: #7a5010;
+      --ac-red:  #882010;
+      --ac-grn:  #2a5c18;
+      --ac-blue: #184878;
+      --ac-pur:  #582878;
+      --tt-bg:   rgba(242,230,200,.98);
+      --tt-bd:   #b0904c;
+      --map-bg:  #ccc0a0;
+      --zbtn-bg: rgba(232,216,168,.95);
+      --scrollbar: #b0904c;
+    }
+    [data-theme="terminal"] {
+      --bg-0:    #080c12;
+      --bg-1:    #0d1117;
+      --bg-2:    #161b22;
+      --bg-3:    #11161d;
+      --bd-1:    #30363d;
+      --bd-2:    #1c2028;
+      --tx-1:    #c9d1d9;
+      --tx-2:    #8b949e;
+      --tx-3:    #9098a3;
+      --ac-gold: #f0883e;
+      --ac-red:  #f85149;
+      --ac-grn:  #3fb950;
+      --ac-blue: #58a6ff;
+      --ac-pur:  #6c5ce7;
+      --tt-bg:   rgba(13,17,23,.95);
+      --tt-bd:   #30363d;
+      --map-bg:  #080c12;
+      --zbtn-bg: rgba(22,27,34,.92);
+      --scrollbar: #30363d;
+    }
+
+    /* ── Reset ─────────────────────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
       width: 100vw; height: 100vh;
       display: flex; flex-direction: column;
-      background: #0d1117; color: #c9d1d9;
-      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      background: var(--bg-1); color: var(--tx-1);
+      font-family: 'Inter', system-ui, sans-serif;
       overflow: hidden; font-size: 12px;
     }
 
-    /* ── Toolbar ───────────────────────────────────────────────── */
+    /* ── Toolbar ───────────────────────────────────────────────────── */
     #toolbar {
-      display: flex; align-items: center; gap: 7px;
+      display: flex; align-items: center; gap: 11px;
       padding: 4px 10px;
-      background: #161b22; border-bottom: 1px solid #30363d;
+      background: var(--bg-2); border-bottom: 1px solid var(--bd-1);
       flex-shrink: 0; flex-wrap: wrap;
     }
-    #toolbar .title  { font-size: 15px; font-weight: 800; color: #f0883e; letter-spacing: 1.5px; }
-    #toolbar .divider { color: #30363d; }
-    #lbl-year        { color: #8b949e; font-size: 9px; }
-    #lbl-nations     { color: #58a6ff; font-size: 9px; }
-    #lbl-wars        { color: #f85149; font-size: 9px; font-weight: 600; }
-    #lbl-zoom        { color: #484f58; font-size: 8px; }
+    #toolbar .title {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: 16px; font-weight: 400; color: var(--ac-gold);
+      letter-spacing: 0.5px; font-style: italic;
+    }
+    #toolbar .divider { color: var(--bd-1); }
+    #lbl-year        { color: var(--tx-2); font-size: 13px; }
+    #lbl-nations     { color: var(--ac-blue); font-size: 13px; }
+    #lbl-wars        { color: var(--ac-red); font-size: 13px; font-weight: 600; }
+    #lbl-zoom        { color: var(--tx-3); font-size: 8px; }
     .spacer          { flex: 1; }
 
     button, select {
-      cursor: pointer; font-family: inherit; font-size: 9px;
+      cursor: pointer; font-family: 'Inter', sans-serif; font-size: 13px;
       border-radius: 4px; border: none; font-weight: 600;
     }
-    .btn { background: #30363d; color: #fff; padding: 3px 8px; }
-    .btn:hover { filter: brightness(1.2); }
-    .btn-green  { background: #238636; }
-    .btn-red    { background: #da3633; }
-    .btn-purple { background: #6c5ce7; }
+    .btn { background: var(--bd-1); color: var(--tx-1); padding: 3px 8px; border: 1px solid var(--bd-1); }
+    .btn:hover { filter: brightness(1.25); }
+    .btn-green  { background: var(--ac-grn); color: #fff; border-color: var(--ac-grn); }
+    .btn-red    { background: var(--ac-red); color: #fff; border-color: var(--ac-red); }
+    .btn-purple { background: var(--ac-pur); color: #fff; border-color: var(--ac-pur); }
     select {
-      background: #21262d; color: #c9d1d9;
-      border: 1px solid #30363d; padding: 2px 5px;
+      background: var(--bg-1); color: var(--tx-1);
+      border: 1px solid var(--bd-1); padding: 2px 5px;
     }
-    label.chk { font-size: 8px; color: #8b949e; cursor: pointer; display: flex; align-items: center; gap: 3px; }
+    label.chk { font-size: 8px; color: var(--tx-2); cursor: pointer; display: flex; align-items: center; gap: 3px; }
 
-    /* ── Settings panel ────────────────────────────────────────── */
+    /* ── Settings panel ────────────────────────────────────────────── */
     #settings-panel {
       display: none; flex-wrap: wrap; align-items: center; gap: 14px;
-      background: #161b22; border-bottom: 1px solid #30363d;
-      padding: 6px 14px; font-size: 9px; color: #8b949e;
+      background: var(--bg-2); border-bottom: 1px solid var(--bd-1);
+      padding: 6px 14px; font-size: 13px; color: var(--tx-2);
       flex-shrink: 0;
     }
     #settings-panel label { display: flex; align-items: center; gap: 4px; }
     #settings-panel input[type=range] { width: 55px; vertical-align: middle; }
     #settings-panel .val { min-width: 20px; }
 
-    /* ── Main area ─────────────────────────────────────────────── */
+    /* ── Main area ─────────────────────────────────────────────────── */
     #main { display: flex; flex: 1; overflow: hidden; }
 
-    /* ── Map pane ──────────────────────────────────────────────── */
+    /* ── Map pane ──────────────────────────────────────────────────── */
     #map-wrap {
-      flex: 1; position: relative; overflow: hidden; background: #080c12;
+      flex: 1; position: relative; overflow: hidden; background: var(--map-bg);
     }
     #map { cursor: grab; display: block; }
     #map:active { cursor: grabbing; }
 
+    /* ── Tooltip — sepia style ─────────────────────────────────────── */
     #tooltip {
       display: none; position: absolute; pointer-events: none;
-      background: rgba(13,17,23,.95); border: 1px solid #30363d;
-      border-radius: 4px; padding: 4px 7px; font-size: 8px;
-      line-height: 1.6; min-width: 110px; z-index: 10;
+      background: var(--tt-bg); border: 1px solid var(--tt-bd);
+      border-radius: 5px; padding: 5px 8px; font-size: 11px;
+      font-family: 'Crimson Pro', Georgia, serif;
+      line-height: 1.65; min-width: 120px; z-index: 10;
+      color: var(--tx-1);
+      box-shadow: 0 3px 12px rgba(0,0,0,0.5);
     }
-    .tt-coord { color: #6e7681; }
+    .tt-coord { color: var(--tx-3); }
+    .tt-section {
+      font-family: 'Instrument Serif', serif;
+      font-size: 9.5px; color: var(--ac-gold);
+      border-bottom: 1px solid var(--bd-2);
+      margin: 3px 0 2px; padding-bottom: 2px;
+    }
 
     #zoom-btns {
       position: absolute; bottom: 6px; right: 6px;
@@ -80,126 +163,149 @@
     }
     .zbtn {
       width: 24px; height: 24px; font-size: 13px;
-      background: rgba(22,27,34,.92); color: #c9d1d9;
-      border: 1px solid #30363d; border-radius: 4px;
+      background: var(--zbtn-bg); color: var(--tx-1);
+      border: 1px solid var(--bd-1); border-radius: 4px;
       display: flex; align-items: center; justify-content: center;
       cursor: pointer; font-family: inherit;
     }
     .zbtn:hover { filter: brightness(1.3); }
 
-    /* ── Sidebar ───────────────────────────────────────────────── */
+    /* ── Sidebar ───────────────────────────────────────────────────── */
     #city-panel {
       width: 300px; flex-shrink: 0;
-      background: #11161d; border-left: 1px solid #30363d;
+      background: var(--bg-3); border-left: 1px solid var(--bd-1);
       display: none; flex-direction: column; overflow: hidden;
     }
     #city-panel-header {
-      padding: 6px 8px;
-      border-bottom: 1px solid #30363d;
-      background: #161b22;
-      color: #8b949e;
-      font-size: 8px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 1px;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--bd-1);
+      background: var(--bg-2);
+      color: var(--tx-2);
+      font-family: 'Instrument Serif', serif;
+      font-size: 11px; font-style: italic;
+      letter-spacing: 0.3px;
     }
     #city-panel-body {
       flex: 1;
       overflow-y: auto;
-      padding: 8px;
-      font-size: 10px;
-      line-height: 1.45;
-      color: #c9d1d9;
-      background: #0d1117;
+      padding: 8px 10px;
+      font-size: 11px;
+      font-family: 'Crimson Pro', Georgia, serif;
+      line-height: 1.6;
+      color: var(--tx-1);
+      background: var(--bg-1);
     }
     .city-panel-title {
-      font-size: 12px;
-      font-weight: 700;
-      color: #e6edf3;
-      margin-bottom: 4px;
+      font-family: 'Instrument Serif', serif;
+      font-size: 28px; font-weight: 400;
+      color: var(--tx-1);
+      margin-bottom: 3px;
     }
     .city-panel-sub {
-      color: #8b949e;
-      font-size: 9px;
+      color: var(--tx-2);
+      font-size: 13px;
       margin-bottom: 6px;
     }
     .city-panel-section {
-      margin-top: 6px;
-      padding-top: 6px;
-      border-top: 1px solid #30363d;
+      margin-top: 11px;
+      padding-top: 11px;
+      border-top: 1px solid var(--bd-2);
     }
     .city-panel-section-label {
-      color: #8b949e;
-      font-size: 9px;
-      margin-bottom: 3px;
+      font-family: 'Instrument Serif', serif;
+      font-size: 15px; font-style: italic;
+      color: var(--ac-gold);
+      margin-bottom: 4px;
+    }
+    .stat-grid {
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 2px 6px;
+      margin: 4px 0;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .stat-label {
+      color: var(--tx-3);
+      font-style: italic;
+      white-space: nowrap;
     }
 
     #sidebar {
       width: 250px; flex-shrink: 0;
-      background: #161b22; border-left: 1px solid #30363d;
+      background: var(--bg-2); border-left: 1px solid var(--bd-1);
       display: flex; flex-direction: column; overflow: hidden;
+      font-family: 'Crimson Pro', Georgia, serif;
     }
 
     #nation-scroll { flex: 1; overflow-y: auto; padding: 5px; }
 
     .section-label {
-      font-size: 7px; color: #8b949e; font-weight: 700;
-      margin-bottom: 3px; text-transform: uppercase; letter-spacing: 1px;
+      font-family: 'Instrument Serif', serif;
+      font-size: 18px; color: var(--tx-2); font-style: italic;
+      margin-bottom: 4px; letter-spacing: 0.3px;
     }
 
     .civ-row {
       padding: 3px 4px; margin-bottom: 1px;
       border-radius: 3px; cursor: pointer;
     }
-    .civ-row:hover   { background: rgba(56,139,253,.06); }
-    .civ-row.selected { background: rgba(56,139,253,.12); }
-    .civ-row.fallen  { opacity: .4; font-size: 7px; }
+    .civ-row:hover   { background: rgba(200,149,40,.07); }
+    .civ-row.selected { background: rgba(200,149,40,.13); }
+    .civ-row.fallen  { opacity: .4; font-size: 11px; }
     .civ-row-top { display: flex; align-items: center; gap: 3px; }
-    .civ-name  { font-size: 9px; font-weight: 600; color: #e6edf3; }
-    .civ-sub   { font-size: 7px; color: #484f58; padding-left: 10px; }
-    .civ-size  { font-size: 7px; color: #6e7681; margin-left: auto; }
-    .dot { width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0; }
-    .war-badge  { font-size: 6px; color: #f85149; font-weight: 800; }
+    .civ-name  { font-size: 14px; font-weight: 600; color: var(--tx-1); }
+    .civ-sub   { font-size: 12px; color: var(--tx-3); padding-left: 10px; }
+    .civ-size  { font-size: 12px; color: var(--tx-2); margin-left: auto; }
+    .dot { width: 12px; height: 11px; border-radius: 2px; flex-shrink: 0; }
+    .war-badge  { font-size: 12px; color: var(--ac-red); font-weight: 800; }
 
-    #fallen-header { font-size: 7px; color: #484f58; font-weight: 700; margin-top: 5px; text-transform: uppercase; letter-spacing: 1px; }
+    #fallen-header { font-size: 11px; color: var(--tx-3); font-weight: 700; margin-top: 5px; text-transform: uppercase; letter-spacing: 1px; }
 
-    /* ── Civ detail ────────────────────────────────────────────── */
+    /* ── Civ detail ────────────────────────────────────────────────── */
     #civ-detail {
-      border-top: 1px solid #30363d;
+      border-top: 1px solid var(--bd-1);
       padding: 6px; max-height: 300px; overflow-y: auto;
-      background: #0d1117; font-size: 9px;
+      background: var(--bg-1); font-size: 13px;
     }
     .detail-header { display: flex; align-items: center; gap: 3px; margin-bottom: 3px; }
-    .detail-name   { font-size: 11px; font-weight: 700; color: #e6edf3; }
-    .detail-sub    { font-size: 7px; color: #6e7681; margin-bottom: 2px; }
-    .detail-stats  { color: #8b949e; line-height: 1.7; margin-bottom: 3px; }
-    .detail-section-label { font-size: 7px; color: #6e7681; font-weight: 700; margin-top: 3px; }
-    .war-label     { color: #f85149; }
-    .detail-city   { font-size: 7px; color: #8b949e; line-height: 1.4; cursor: pointer; padding: 1px 2px; border-radius: 2px; }
-    .detail-city:hover { background: rgba(56,139,253,.08); }
-    .detail-city.city-selected { background: rgba(200,160,0,.15); border-left: 2px solid #c8a000; }
-    .detail-city span { color: #484f58; }
-    .detail-war    { font-size: 7px; color: #f85149; }
-    .detail-peace  { font-size: 7px; color: #3fb950; margin-top: 2px; }
-    .detail-event  { font-size: 7px; color: #8b949e; line-height: 1.2; }
-    .fallen-badge  { font-size: 7px; color: #da3633; font-weight: 700; }
-
-    /* ── Event log ─────────────────────────────────────────────── */
-    #event-log-wrap {
-      border-top: 1px solid #30363d;
-      padding: 4px; max-height: 90px; overflow-y: auto;
-      font-size: 7px; color: #6e7681; line-height: 1.3;
-      background: #0d1117; flex-shrink: 0;
+    .detail-name   {
+      font-family: 'Instrument Serif', serif;
+      font-size: 13px; color: var(--tx-1);
     }
-    .log-label { font-weight: 700; color: #8b949e; margin-bottom: 1px; text-transform: uppercase; letter-spacing: 1px; font-size: 7px; }
-    .log-line  { border-bottom: 1px solid #1c2028; padding-bottom: 1px; margin-bottom: 1px; }
+    .detail-sub    { font-size: 11px; color: var(--tx-2); margin-bottom: 2px; }
+    .detail-stats  { color: var(--tx-2); line-height: 1.7; margin-bottom: 3px; }
+    .detail-section-label { font-size: 11px; color: var(--tx-3); font-weight: 700; margin-top: 3px; font-family: 'Instrument Serif', serif; font-style: italic; }
+    .war-label     { color: var(--ac-red); }
+    .detail-city   { font-size: 11px; color: var(--tx-2); line-height: 1.4; cursor: pointer; padding: 1px 2px; border-radius: 2px; }
+    .detail-city:hover { background: rgba(200,149,40,.08); }
+    .detail-city.city-selected { background: rgba(200,149,40,.15); border-left: 2px solid var(--ac-gold); }
+    .detail-city span { color: var(--tx-3); }
+    .detail-war    { font-size: 11px; color: var(--ac-red); }
+    .detail-peace  { font-size: 11px; color: var(--ac-grn); margin-top: 2px; }
+    .detail-event  { font-size: 11px; color: var(--tx-2); line-height: 1.2; }
+    .fallen-badge  { font-size: 11px; color: var(--ac-red); font-weight: 700; }
 
-    /* ── Scrollbars ────────────────────────────────────────────── */
+    /* ── Event log ─────────────────────────────────────────────────── */
+    #event-log-wrap {
+      border-top: 1px solid var(--bd-1);
+      padding: 4px; max-height: 90px; overflow-y: auto;
+      font-size: 11px; color: var(--tx-3); line-height: 1.3;
+      background: var(--bg-1); flex-shrink: 0;
+    }
+    .log-label {
+      font-family: 'Instrument Serif', serif;
+      font-weight: 400; font-style: italic;
+      color: var(--tx-2); margin-bottom: 1px; font-size: 8.5px;
+    }
+    .log-line  { border-bottom: 1px solid var(--bd-2); padding-bottom: 1px; margin-bottom: 1px; }
+
+    /* ── Scrollbars ────────────────────────────────────────────────── */
     ::-webkit-scrollbar       { width: 4px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+    ::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 2px; }
 
-    /* ── Diplomacy modal ──────────────────────────────────────── */
+    /* ── Diplomacy modal ──────────────────────────────────────────── */
     #diplo-modal {
       display: none; position: fixed; top: 0; left: 0;
       width: 100%; height: 100%;
@@ -208,30 +314,38 @@
     }
     #diplo-content {
       max-width: 1280px; margin: 0 auto;
-      background: #0d1117; border: 1px solid #30363d;
+      background: var(--bg-1); border: 1px solid var(--bd-1);
       border-radius: 6px; padding: 14px 18px;
-      color: #c9d1d9;
+      color: var(--tx-1);
     }
     #diplo-content .diplo-header {
       display: flex; align-items: center; justify-content: space-between;
-      border-bottom: 1px solid #30363d; padding-bottom: 6px; margin-bottom: 10px;
+      border-bottom: 1px solid var(--bd-1); padding-bottom: 6px; margin-bottom: 10px;
     }
-    #diplo-content h2 { font-size: 14px; color: #f0883e; letter-spacing: 1px; }
+    #diplo-content h2 {
+      font-family: 'Instrument Serif', serif;
+      font-size: 18px; color: var(--ac-gold);
+      font-weight: 400; letter-spacing: 0.5px;
+    }
     #diplo-close {
-      background: #da3633; color: #fff; padding: 3px 10px;
+      background: var(--ac-red); color: #fff; padding: 3px 10px;
       border: none; border-radius: 3px; cursor: pointer; font-weight: 700;
       font-family: inherit;
     }
-    #diplo-content .diplo-section { margin: 12px 0 6px; font-size: 10px;
-      color: #8b949e; text-transform: uppercase; letter-spacing: 1px;
-      font-weight: 700; }
-    #diplo-content table { border-collapse: collapse; font-size: 9px; }
+    #diplo-content .diplo-section {
+      margin: 12px 0 6px; font-size: 11px;
+      color: var(--ac-gold);
+      font-family: 'Instrument Serif', serif;
+      font-style: italic; font-weight: 400;
+      letter-spacing: 0.3px;
+    }
+    #diplo-content table { border-collapse: collapse; font-size: 13px; }
     #diplo-content th, #diplo-content td {
       padding: 2px 4px; text-align: center;
-      border: 1px solid #1c2128; vertical-align: middle;
+      border: 1px solid var(--bd-2); vertical-align: middle;
     }
     #diplo-content th {
-      background: #161b22; color: #c9d1d9; font-weight: 600;
+      background: var(--bg-2); color: var(--tx-1); font-weight: 600;
       writing-mode: vertical-rl; transform: rotate(180deg);
       min-height: 80px; max-width: 18px;
     }
@@ -241,10 +355,10 @@
       max-width: none;
     }
     #diplo-content .rel-cell { min-width: 22px; font-weight: 600; }
-    #diplo-content .rel-self { background: #1c2128; }
+    #diplo-content .rel-self { background: var(--bg-2); }
     #diplo-content .war-list { display: flex; flex-direction: column; gap: 6px; }
     #diplo-content .war-card {
-      background: #161b22; border: 1px solid #30363d; border-radius: 4px;
+      background: var(--bg-2); border: 1px solid var(--bd-1); border-radius: 4px;
       padding: 6px 10px; font-size: 10px;
     }
     #diplo-content .war-card .war-head {
@@ -255,44 +369,41 @@
       font-size: 8px; padding: 1px 4px; border-radius: 2px;
       font-weight: 700; text-transform: uppercase;
     }
-    #diplo-content .war-role.agg { background: #da3633; color: #fff; }
-    #diplo-content .war-role.def { background: #1a6a9e; color: #fff; }
+    #diplo-content .war-role.agg { background: var(--ac-red); color: #fff; }
+    #diplo-content .war-role.def { background: var(--ac-blue); color: #fff; }
     #diplo-content .morale-bar {
       display: inline-block; width: 90px; height: 6px;
-      background: #1c2128; border-radius: 2px; vertical-align: middle;
+      background: var(--bd-2); border-radius: 2px; vertical-align: middle;
       overflow: hidden; position: relative;
     }
-    #diplo-content .morale-bar span {
-      display: block; height: 100%;
-    }
+    #diplo-content .morale-bar span { display: block; height: 100%; }
     #diplo-content .power-list { display: flex; flex-direction: column; }
     #diplo-content .power-row {
       display: flex; align-items: center; gap: 6px; padding: 2px 4px;
       font-size: 10px;
     }
-    #diplo-content .power-row .dot { width: 9px; height: 9px; border-radius: 2px; }
+    #diplo-content .power-row .dot { width: 13px; height: 13px; border-radius: 2px; }
     #diplo-content .power-row .pname { flex: 1; }
     #diplo-content .power-row .pbar {
-      display: inline-block; height: 5px; background: #30363d; border-radius: 2px;
+      display: inline-block; height: 5px; background: var(--bd-1); border-radius: 2px;
       position: relative; overflow: hidden; min-width: 50px;
     }
-    #diplo-content .power-row .pbar span {
-      display: block; height: 100%; background: #58a6ff;
-    }
+    #diplo-content .power-row .pbar span { display: block; height: 100%; background: var(--ac-blue); }
   </style>
 </head>
-<body>
+<body data-theme="inkwell">
 
 <!-- Toolbar -->
 <div id="toolbar">
-  <span class="title">⚔ CIVITAS</span>
+  <span class="title">Civ Simulator</span>
+  <span class="divider">│</span>
   <span id="lbl-year">Year 0</span>
   <span class="divider">│</span>
   <span id="lbl-nations">0 nations</span>
   <span id="lbl-wars"></span>
   <span id="lbl-zoom">1.0×</span>
   <div class="spacer"></div>
-  <button id="btn-mapmode" class="btn">Ter</button>
+  <button id="btn-mapmode" class="btn">Terrain</button>
   <select id="sel-resource-good" style="display:none; font-size:8px; padding:2px 3px;">
     <option value="">Loading goods...</option>
   </select>
@@ -303,9 +414,14 @@
     <option value="2">2×</option>
     <option value="4">4×</option>
   </select>
-  <button id="btn-reset"    class="btn">🔄</button>
-  <button id="btn-diplo"    class="btn btn-purple">Diplo</button>
-  <button id="btn-settings" class="btn">⚙</button>
+  <button id="btn-reset"   class="btn">↺</button>
+  <button id="btn-diplo"   class="btn btn-purple">Diplo</button>
+  <button id="btn-settings" class="btn">Settings</button>
+  <select id="sel-theme" style="font-size:8px">
+    <option value="inkwell" selected>Inkwell</option>
+    <option value="parchment">Parchment</option>
+    <option value="terminal">Terminal</option>
+  </select>
   <label class="chk"><input type="checkbox" id="chk-levels" /> Lvls</label>
   <label class="chk"><input type="checkbox" id="chk-res" checked /> Res</label>
 </div>
@@ -371,22 +487,25 @@
 <div id="diplo-modal">
   <div id="diplo-content">
     <div class="diplo-header">
-      <h2>DIPLOMACY</h2>
+      <h2>Diplomacy</h2>
       <button id="diplo-close">Close</button>
     </div>
     <div id="diplo-body"></div>
   </div>
 </div>
 
-<!-- Connection status for debugging -->
-<div id="conn-status" style="position:fixed;bottom:4px;left:4px;font-size:10px;color:#f85149;z-index:999;font-family:monospace;background:rgba(0,0,0,.8);padding:2px 6px;border-radius:3px;">Loading JS...</div>
+<!-- Connection status -->
+<div id="conn-status" style="position:fixed;bottom:4px;left:4px;font-size:10px;color:var(--ac-red);z-index:999;font-family:'Inter',sans-serif;background:rgba(0,0,0,.8);padding:2px 6px;border-radius:3px;">Loading...</div>
 
 <script>
-  // Catch module load errors (e.g. bad MIME type on Windows)
   window.addEventListener("error", e => {
     document.getElementById("conn-status").textContent = "JS Error: " + e.message;
   });
+  // Theme switcher
+  document.getElementById("sel-theme").addEventListener("change", function() {
+    document.body.setAttribute("data-theme", this.value);
+  });
 </script>
-<script type="module" src="/static/ui.js"></script>
+<script type="module" src="/static/ui.js?v=4"></script>
 </body>
 </html>

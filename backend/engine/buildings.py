@@ -12,7 +12,7 @@ BUILDING_TYPES: dict[str, BuildingType] = {
     "textile_factory": BuildingType(
         key="textile_factory",
         name="Textile Factory",
-        max_level=30,
+        max_level=100,
         staffable=True,
         # The investment code values these resources at market prices.
         cost_resources={"lumber", "stone", "metal"},
@@ -35,7 +35,7 @@ BUILDING_TYPES: dict[str, BuildingType] = {
     "foundry": BuildingType(
         key="foundry",
         name="Copper Foundry",
-        max_level=50,
+        max_level=200,
         staffable=True,
         cost_resources={"stone", "lumber"},
         inputs={"copper_ore": 2.0, "stone": 0.25},
@@ -45,7 +45,7 @@ BUILDING_TYPES: dict[str, BuildingType] = {
     "foundry_iron": BuildingType(
         key="foundry_iron",
         name="Iron Foundry",
-        max_level=50,
+        max_level=500,
         staffable=True,
         cost_resources={"stone", "copper"},
         inputs={"iron_ore": 1.0, "stone": 0.25},
@@ -75,7 +75,7 @@ BUILDING_TYPES: dict[str, BuildingType] = {
     "paper_mill": BuildingType(
         key="paper_mill",
         name="Paper Mill",
-        max_level=10,
+        max_level=100,
         staffable=True,
         cost_resources={"lumber", "stone", "fabric"},
         inputs={"lumber": 2.5, "fabric": 0.2},
@@ -104,7 +104,7 @@ BUILDING_TYPES: dict[str, BuildingType] = {
     "trading_house": BuildingType(
         key="trading_house",
         name="Trading House",
-        max_level=25,
+        max_level=10000,
         staffable=True,
         cost_resources={"lumber", "stone", "fabric"},
         inputs={},

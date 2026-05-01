@@ -341,7 +341,7 @@ function showTooltip(x, y, info) {
         if (c.coastal) tags.push("⚓ Coast");
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
-        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
+        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:12px">${tags.join(" · ")}</div>`);
         lines.push(`<div>Pop: ${c.pop} / ${c.cap}${c.founded ? ` · Est. yr ${c.founded}` : ""}</div>`);
         lines.push(`<div style="color:#8b949e">🍞 Food ${c.food} · 💰 Wealth ${c.wealth}</div>`);
         lines.push(`<div style="color:#8b949e">📦 Trade ${c.trade} (potential ${c.trade_potential}, roads +${c.road_trade})</div>`);

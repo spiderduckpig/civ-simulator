@@ -253,26 +253,28 @@ function _tracePath(ctx, cells) {
     }
 }
 
-function _drawRiverRoad(ctx, seg, riverLw) {
-    // "River with road" composite: brown embankment, then river on top
-    // This looks like a river flanked by packed-earth sidewalks
+function _traceOffsetPath(ctx, cells, offset) {
+    for (let i = 0; i < cells.length; i++) {
+        const [cx, cy] = _cellPx(cells[i]);
+        let dx = 0, dy = 0;
+        if (i > 0) { const [px, py] = _cellPx(cells[i - 1]); dx += cx - px; dy += cy - py; }
+        if (i < cells.length - 1) { const [nx, ny] = _cellPx(cells[i + 1]); dx += nx - cx; dy += ny - cy; }
+        const len = Math.hypot(dx, dy) || 1;
+        dx /= len; dy /= len;
+        const ox = cx + dy * offset, oy = cy - dx * offset;
+        if (i === 0) ctx.moveTo(ox, oy); else ctx.lineTo(ox, oy);
+    }
+}
+
+function _drawRiverRoad(ctx, seg) {
     if (seg.length < 2) return;
-    // Outer layer: brown embankment (wider than river)
     ctx.strokeStyle = "#c8a862";
-    ctx.lineWidth = riverLw + 3.5;
-    ctx.lineCap = "butt";
+    ctx.lineWidth = 1.5;
+    ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.setLineDash([]);
     ctx.beginPath();
-    _tracePath(ctx, seg);
-    ctx.stroke();
-    // Inner layer: re-draw river on top so it sits in the middle
-    ctx.strokeStyle = "#4aaef0";
-    ctx.lineWidth = riverLw;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    _tracePath(ctx, seg);
+    _traceOffsetPath(ctx, seg, CELL * 0.38);
     ctx.stroke();
 }
 
@@ -587,18 +589,33 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
                     ctx.stroke();
                 }
 
-                // Bridges: where road crosses river (single river cell between non-river)
+                // Bridges: perpendicular planks + railings based on road direction
                 for (let i = 1; i < path.length - 1; i++) {
                     if (riverSet.has(path[i]) && !riverSet.has(path[i - 1]) && !riverSet.has(path[i + 1])) {
                         const [bx, by] = _cellPx(path[i]);
-                        // Brown planks across river
-                        ctx.strokeStyle = "#8b6914";
-                        ctx.lineWidth = riverLw + 2.5;
-                        ctx.lineCap = "butt";
+                        const isH = ((path[i - 1] / W) | 0) === ((path[i] / W) | 0);
+                        const half = CELL * 0.5;
                         ctx.setLineDash([]);
+                        ctx.strokeStyle = "#7a5c14";
+                        ctx.lineWidth = 1.3;
+                        ctx.lineCap = "butt";
+                        for (let p = -1; p <= 1; p++) {
+                            const off = p * half * 0.45;
+                            ctx.beginPath();
+                            if (isH) { ctx.moveTo(bx + off, by - half * 0.7); ctx.lineTo(bx + off, by + half * 0.7); }
+                            else      { ctx.moveTo(bx - half * 0.7, by + off); ctx.lineTo(bx + half * 0.7, by + off); }
+                            ctx.stroke();
+                        }
+                        ctx.strokeStyle = "#5a3c0a";
+                        ctx.lineWidth = 0.8;
                         ctx.beginPath();
-                        ctx.moveTo(bx - 1.5, by - 1.5);
-                        ctx.lineTo(bx + 1.5, by + 1.5);
+                        if (isH) {
+                            ctx.moveTo(bx - half * 0.5, by - half * 0.72); ctx.lineTo(bx + half * 0.5, by - half * 0.72);
+                            ctx.moveTo(bx - half * 0.5, by + half * 0.72); ctx.lineTo(bx + half * 0.5, by + half * 0.72);
+                        } else {
+                            ctx.moveTo(bx - half * 0.72, by - half * 0.5); ctx.lineTo(bx - half * 0.72, by + half * 0.5);
+                            ctx.moveTo(bx + half * 0.72, by - half * 0.5); ctx.lineTo(bx + half * 0.72, by + half * 0.5);
+                        }
                         ctx.stroke();
                     }
                 }
@@ -700,7 +717,7 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
         for (const city of civ.cities) {
             const cx = city.cell % W, cy = (city.cell / W) | 0;
             const px = cx * CELL + CELL / 2, py = cy * CELL + CELL / 2;
-            const rawSz = Math.sqrt(city.population / 5) * 0.055;
+            const rawSz = Math.sqrt(city.population / 2) * 0.055;
             const sz = Math.max(1.2, Math.min(7.5, rawSz));
             const showLabel = city.is_capital || (zoom >= 1.5 && city.population > 60) || zoom >= 2.5;
 
@@ -708,7 +725,7 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
                 // Geometric star disc: civ-colored ring, white base,
                 // gold 5-point star polygon on top. Crisper than a unicode
                 // glyph and scales cleanly with zoom.
-                const R = sz + 1.4;
+                const R = sz + 0.6;
                 // dark halo so the icon stays legible over any terrain
                 ctx.fillStyle = "rgba(0,0,0,0.55)";
                 ctx.beginPath(); ctx.arc(px, py, R + 1.1, 0, Math.PI * 2); ctx.fill();
@@ -746,16 +763,16 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
             }
 
             if (showLabel) {
-                const ls = city.is_capital ? 7 : 5.5;
+                const ls = city.is_capital ? 7.5 : 6;
                 const label = city.name;
-                ctx.font         = `bold ${ls}px sans-serif`;
+                ctx.font         = `700 ${ls}px 'Cinzel', serif`;
                 ctx.textAlign    = "center";
-                ctx.textBaseline = "top";
+                ctx.textBaseline = "bottom";
                 ctx.strokeStyle  = "rgba(0,0,0,.7)";
                 ctx.lineWidth    = 2;
-                ctx.strokeText(label, px, py + sz + 2);
+                ctx.strokeText(label, px, py - sz - 2);
                 ctx.fillStyle    = city.is_capital ? "#ffd700" : "#eee";
-                ctx.fillText(label, px, py + sz + 2);
+                ctx.fillText(label, px, py - sz - 2);
             }
         }
     }
@@ -782,15 +799,15 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
         const px = cx2 * CELL + CELL / 2, py = cy2 * CELL + CELL / 2;
 
         const atWar = wars.some(w => w.att === civ.id || w.def_id === civ.id);
-        ctx.font         = `900 ${fs}px Georgia,serif`;
+        ctx.font         = `900 ${fs}px 'Cinzel', serif`;
         ctx.textAlign    = "center";
         ctx.textBaseline = "middle";
-        ctx.strokeStyle  = "rgba(0,0,0,.55)";
-        ctx.lineWidth    = 2.5;
+        ctx.strokeStyle  = "rgba(0,0,0,.6)";
+        ctx.lineWidth    = 3;
         ctx.strokeText(civ.name.toUpperCase(), px, py);
         ctx.fillStyle    = civ.color;
         ctx.shadowColor  = atWar ? "#f33" : civ.color;
-        ctx.shadowBlur   = atWar ? 5 : 2;
+        ctx.shadowBlur   = atWar ? 6 : 3;
         ctx.fillText(civ.name.toUpperCase(), px, py);
         ctx.shadowBlur   = 0;
     }

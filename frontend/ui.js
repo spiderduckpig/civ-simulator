@@ -6,15 +6,12 @@
 import { renderFrame, getCellInfo } from "./renderer.js";
 
 let W = 160, H = 100, CELL = 6;
-let PX_W = W * CELL, PX_H = H * CELL;
 
 function syncMapDimensions() {
     if (!mapData) return;
     if (Number.isFinite(mapData.width) && mapData.width > 0) W = mapData.width | 0;
     if (Number.isFinite(mapData.height) && mapData.height > 0) H = mapData.height | 0;
     if (Number.isFinite(mapData.cell_size) && mapData.cell_size > 0) CELL = mapData.cell_size;
-    PX_W = W * CELL;
-    PX_H = H * CELL;
 }
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
@@ -80,7 +77,7 @@ function getGoodKeys() {
 }
 
 function goodIcon(good) {
-    return getGoodMeta()[good]?.icon || "•";
+    return getGoodMeta()[good]?.icon || "";
 }
 
 function goodLabel(good) {
@@ -142,7 +139,7 @@ function calcNationalAverageConsumptionLevel(civ) {
 // the degenerate M/L/A path when sweep is exactly 2π.
 function renderProfessionPie(entries, total, size) {
     if (!entries.length || total <= 0) {
-        return `<div style="font-size:9px;color:#8b949e">No employees</div>`;
+        return `<div style="font-size:12px;color:#8b949e">No employees</div>`;
     }
     const r = size / 2 - 1;
     const cx = size / 2, cy = size / 2;
@@ -196,23 +193,23 @@ function renderProfessionsSection(city, civ) {
     const legend = entries.map(e => {
         const pct = total > 0 ? (e.count / total * 100).toFixed(1) : "0.0";
         const sharePct = (e.share * 100).toFixed(1);
-        return `<div style="display:flex;align-items:center;gap:4px;font-size:9px;margin-bottom:2px">
+        return `<div style="display:flex;align-items:center;gap:4px;font-size:12px;margin-bottom:2px">
             <span style="width:8px;height:8px;background:${e.color};border-radius:2px;display:inline-block;flex-shrink:0"></span>
             <span>${e.icon} ${e.label}</span>
-            <span style="margin-left:auto;color:#8b949e">${e.count} · ${pct}% · ₿${e.wage.toFixed(2)} wage · C${e.level.toFixed(2)} · ${sharePct}% share</span>
+            <span style="margin-left:auto;color:var(--tx-2)">${e.count} · ${pct}% · ₿${e.wage.toFixed(2)} wage · C${e.level.toFixed(2)} · ${sharePct}% share</span>
         </div>`;
     }).join("");
     return `
         <div class="city-panel-section">
             <div class="city-panel-section-label">Professions (${total})</div>
-            <div style="font-size:9px;color:#8b949e;margin-bottom:5px">
-                City avg consumption: <span style="color:#c9d1d9">C${cityAvgConsumption.toFixed(2)}</span>
-                ${city.is_capital ? ` · National avg: <span style="color:#58a6ff">C${(nationalAvgConsumption || 0).toFixed(2)}</span>` : ""}
-                · Avg wage: <span style="color:#c9d1d9">₿${avgWage.toFixed(2)}</span>
+            <div style="font-size:12px;color:var(--tx-2);margin-bottom:5px">
+                City avg consumption: <span style="color:var(--tx-1)">C${cityAvgConsumption.toFixed(2)}</span>
+                ${city.is_capital ? ` · National avg: <span style="color:var(--ac-blue)">C${(nationalAvgConsumption || 0).toFixed(2)}</span>` : ""}
+                · Avg wage: <span style="color:var(--tx-1)">₿${avgWage.toFixed(2)}</span>
             </div>
             <div style="display:flex;gap:10px;align-items:flex-start">
                 ${renderProfessionPie(entries, total, 90)}
-                <div style="flex:1;min-width:0">${legend || `<div style="font-size:9px;color:#8b949e">No employees</div>`}</div>
+                <div style="flex:1;min-width:0">${legend || `<div style="font-size:12px;color:#8b949e">No employees</div>`}</div>
             </div>
         </div>
     `;
@@ -268,10 +265,9 @@ function connect() {
             connStatus.style.color = "#3fb950";
         } else if (msg.type === "state") {
             gameState = msg;
-            connStatus.style.display = "none"; // hide once running
-            // Convert territory arrays to plain arrays (already serialised as arrays from backend)
-            renderAll();
+            connStatus.style.display = "none";
             updateUI();
+            renderAll();
         }
     };
 
@@ -425,7 +421,7 @@ function renderSelectedCityPanel(city, civ) {
         const s = city.supply[g] || 0;
         const d = city.demand[g] || 0;
         const p = city.prices[g] || 1.0;
-        const c = p < 1.0 ? "#3fb950" : (p > 2.0 ? "#f85149" : "#f0c040");
+        const c = p < 1.0 ? "var(--ac-grn)" : (p > 2.0 ? "var(--ac-red)" : "var(--ac-gold)");
 
         // Match tooltip trade summary: aggregate by good across all partners.
         let tradeLine = "";
@@ -441,27 +437,38 @@ function renderSelectedCityPanel(city, civ) {
             if (absVol >= 0.05) {
                 const avgP = priceSum / Math.max(0.001, trades.reduce((a, [v]) => a + Math.abs(v), 0));
                 const type = totalVol > 0 ? "Import" : "Export";
-                const tColor = totalVol > 0 ? "#58a6ff" : "#d299ff";
+                const tColor = totalVol > 0 ? "var(--ac-blue)" : "var(--ac-pur)";
                 const partners = trades.length > 1 ? `×${trades.length}` : "";
-                tradeLine = `<span style="color:${tColor}; margin-left:4px; font-size:9px">[${type}${partners} ${absVol.toFixed(1)} @ ₿${avgP.toFixed(2)}]</span>`;
+                tradeLine = `<span style="color:${tColor}; margin-left:4px; font-size:12px">[${type}${partners} ${absVol.toFixed(1)} @ ₿${avgP.toFixed(2)}]</span>`;
             }
         }
 
-        return `<div style="display:flex;justify-content:space-between;font-size:10px"><span>${goodIcon(g)} ${goodLabel(g).toUpperCase()}${tradeLine}</span><span>${s.toFixed(1)} / ${d.toFixed(1)} · <span style="color:${c}">₿${p.toFixed(2)}</span></span></div>`;
+        return `<div style="display:grid;grid-template-columns:16px 1fr auto;align-items:baseline;gap:0 3px;font-size:10px"><span>${goodIcon(g)}</span><span>${goodLabel(g).toUpperCase()}${tradeLine}</span><span style="text-align:right;white-space:nowrap">${s.toFixed(1)} / ${d.toFixed(1)} · <span style="color:${c}">₿${p.toFixed(2)}</span></span></div>`;
     }).join("");
 
     const bDetails = city.building_details || [];
+    const hasTHInDetails = bDetails.some(b => b.key === "trading_house");
     const buildingRows = bDetails.length
         ? bDetails.map(b => {
-            const pColor = (b.profit || 0) >= 0 ? "#3fb950" : "#f85149";
-            const inTxt = b.inputs ? Object.entries(b.inputs).map(([g, a]) => `${a} ${g}`).join(", ") : "-";
-            const outTxt = b.outputs ? Object.entries(b.outputs).map(([g, a]) => `${a} ${g}`).join(", ") : "-";
+            const pColor = (b.profit || 0) >= 0 ? "var(--ac-grn)" : "var(--ac-red)";
+            const inTxt = b.inputs ? Object.entries(b.inputs).map(([g, a]) => `${a} ${g}`).join(", ") : "";
+            const outTxt = b.outputs ? Object.entries(b.outputs).map(([g, a]) => `${a} ${g}`).join(", ") : "";
+            const ioLine = (inTxt || outTxt)
+                ? `<div style="font-size:12px;color:var(--tx-2)">${inTxt ? `in: ${inTxt}` : ""}${inTxt && outTxt ? " · " : ""}${outTxt ? `out: ${outTxt}` : ""}</div>`
+                : "";
+            let tradeRow = "";
+            if (b.key === "trading_house") {
+                const tradeCapReq = (city.trade_capacity_required || 0).toFixed(1);
+                const tradeCapProv = (city.trade_capacity_provided || 0).toFixed(1);
+                const tradeVol = (city.trade_export_volume || 0).toFixed(1);
+                tradeRow = `<div style="font-size:12px;color:var(--tx-2)">capacity ${tradeCapReq}/${tradeCapProv} · exports ${tradeVol}</div>`;
+            }
             return `<div style="margin-bottom:4px">
                 <div style="display:flex;justify-content:space-between"><span>🏭 ${b.name} Lv.${b.level} · 👥 ${b.staffed}/${b.level}</span><span style="color:${pColor}">₿${(b.profit || 0).toFixed(2)}/t</span></div>
-                <div style="font-size:9px;color:#8b949e">in: ${inTxt || "-"} · out: ${outTxt || "-"}</div>
+                ${ioLine}${tradeRow}
             </div>`;
         }).join("")
-        : `<div style="font-size:9px;color:#8b949e">No city buildings</div>`;
+        : `<div style="font-size:12px;color:var(--tx-2)">No city buildings</div>`;
 
     const producerMeta = mapData?.producer_buildings || {};
     const capacities = city.capacities || {};
@@ -482,7 +489,7 @@ function renderSelectedCityPanel(city, civ) {
                 const bonusTxt = slots > 0 && mult > 0 ? ` · bonus ${slots} @ +${(mult * 100).toFixed(0)}%` : "";
                 return `<div style="display:flex;justify-content:space-between;font-size:10px"><span>${icon} ${label}</span><span>${used}/${cap}${bonusTxt}</span></div>`;
             }).join("")
-        : `<div style="font-size:9px;color:#8b949e">No producer capacity on current territory</div>`;
+        : `<div style="font-size:12px;color:#8b949e">No producer capacity on current territory</div>`;
 
     const agriCap = sharedCaps.agri || 0;
     const agriUsed = (city.buildings?.farm || 0) + (city.buildings?.cotton_farm || 0);
@@ -494,13 +501,14 @@ function renderSelectedCityPanel(city, civ) {
     const workforce = city.workforce || 0;
     const employed = city.employed_pop || 0;
     const unemployed = city.unemployed_pop || 0;
+    const unempColor = unemployed === 0 ? "var(--ac-grn)" : (unemployed > employed ? "var(--ac-red)" : "var(--ac-gold)");
     const net = city.income_total || 0;
-    const netColor = net >= 0 ? "#3fb950" : "#f85149";
+    const netColor = net >= 0 ? "var(--ac-grn)" : "var(--ac-red)";
     const econOut = city.economic_output || 0;
     const pull = city.attractiveness ?? 1.0;
     const netMig = city.net_migration ?? 0.0;
-    const pullColor = pull > 1.3 ? "#3fb950" : (pull < 0.7 ? "#f85149" : "#f0c040");
-    const migColor = netMig > 0.05 ? "#3fb950" : (netMig < -0.05 ? "#f85149" : "#8b949e");
+    const pullColor = pull > 1.3 ? "var(--ac-grn)" : (pull < 0.7 ? "var(--ac-red)" : "var(--ac-gold)");
+    const migColor = netMig > 0.05 ? "var(--ac-grn)" : (netMig < -0.05 ? "var(--ac-red)" : "var(--tx-3)");
     const migArrow = netMig > 0.05 ? "↑" : (netMig < -0.05 ? "↓" : "·");
     const migLabel = netMig > 0.05 ? `+${netMig.toFixed(1)} incoming` : (netMig < -0.05 ? `${netMig.toFixed(1)} leaving` : "steady");
 
@@ -508,12 +516,11 @@ function renderSelectedCityPanel(city, civ) {
     const foodPct = (city.growth_food_contribution || 0) * 100.0;
     const consPct = (city.growth_consumption_penalty || 0) * 100.0;
     const unempPct = (city.growth_unemployment_penalty || 0) * 100.0;
-    const growthColor = growthPct > 0.02 ? "#3fb950" : (growthPct < -0.02 ? "#f85149" : "#8b949e");
-    const foodColor = foodPct >= 0 ? "#3fb950" : "#f85149";
-    const consColor = consPct < 0 ? "#f85149" : "#8b949e";
-    const unempColorPanel = unempPct < 0 ? "#f85149" : "#8b949e";
+    const growthColor = growthPct > 0.02 ? "var(--ac-grn)" : (growthPct < -0.02 ? "var(--ac-red)" : "var(--tx-3)");
+    const foodColor = foodPct >= 0 ? "var(--ac-grn)" : "var(--ac-red)";
+    const consColor = consPct < 0 ? "var(--ac-red)" : "var(--tx-3)";
+    const unempColorPanel = unempPct < 0 ? "var(--ac-red)" : "var(--tx-3)";
     const fmtPct = v => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
-    const growthLine = `<div>📈 Growth <span style="color:${growthColor}">${fmtPct(growthPct)}</span> / tick · <span style="font-size:9px;color:#8b949e">food <span style="color:${foodColor}">${fmtPct(foodPct)}</span> · consumption <span style="color:${consColor}">${fmtPct(consPct)}</span> · unemployment <span style="color:${unempColorPanel}">${fmtPct(unempPct)}</span></span></div>`;
 
     let governmentSection = "";
     if (city.is_capital && civ && civ.government) {
@@ -542,12 +549,12 @@ function renderSelectedCityPanel(city, civ) {
                 const color = isExpense ? "#f85149" : "#3fb950";
                 const place = flow.city_name ? ` · ${flow.city_name}` : "";
                 const note = flow.note ? ` · ${flow.note}` : "";
-                return `<div style="display:flex;justify-content:space-between;gap:8px;margin-top:3px;font-size:9px">
+                return `<div style="display:flex;justify-content:space-between;gap:8px;margin-top:3px;font-size:12px">
                     <span>${flow.label || flow.kind || "Flow"}${place}${note}</span>
                     <span style="color:${color}">${sign}₿${amount.toFixed(2)}</span>
                 </div>`;
             }).join("")
-            : `<div style="font-size:9px;color:#8b949e">No treasury flows recorded this tick.</div>`;
+            : `<div style="font-size:12px;color:#8b949e">No treasury flows recorded this tick.</div>`;
 
         const queueRows = (gov.construction_queue || []).slice(0, 4).map(order => {
             const statusColor = order.status === "built" ? "#3fb950" : (order.status?.startsWith("blocked") ? "#f85149" : "#f0c040");
@@ -556,14 +563,14 @@ function renderSelectedCityPanel(city, civ) {
                     <span>${order.asset_label || order.asset_key} near ${order.target_civ_name || "?"}</span>
                     <span style="color:${statusColor}">${order.status || "queued"}</span>
                 </div>
-                <div style="font-size:9px;color:#8b949e">prio ${Number(order.priority || 0).toFixed(1)} · host ${order.host_city_name || "?"} · rel ${Number(order.relation || 0).toFixed(2)}</div>
-                <div style="font-size:9px;color:#8b949e">spend ₿${Number(order.estimated_spending || 0).toFixed(2)} · upkeep ₿${Number(order.estimated_upkeep || 0).toFixed(2)}</div>
-                <div style="font-size:9px;color:#8b949e">${order.reason || ""}</div>
+                <div style="font-size:12px;color:#8b949e">prio ${Number(order.priority || 0).toFixed(1)} · host ${order.host_city_name || "?"} · rel ${Number(order.relation || 0).toFixed(2)}</div>
+                <div style="font-size:12px;color:#8b949e">spend ₿${Number(order.estimated_spending || 0).toFixed(2)} · upkeep ₿${Number(order.estimated_upkeep || 0).toFixed(2)}</div>
+                <div style="font-size:12px;color:#8b949e">${order.reason || ""}</div>
             </div>`;
         }).join("");
 
         const upkeepRows = Object.entries(gov.fort_upkeep_goods || {}).map(([good, qty]) => {
-            return `<div style="display:flex;justify-content:space-between;margin-top:3px;font-size:9px">
+            return `<div style="display:flex;justify-content:space-between;margin-top:3px;font-size:12px">
                 <span>${goodIcon(good)} ${goodLabel(good)}</span>
                 <span>${qty.toFixed(1)} / fort / tick</span>
             </div>`;
@@ -579,22 +586,22 @@ function renderSelectedCityPanel(city, civ) {
                     <span>🏯 Fort @${f.cell} · Lv.${level || "?"}</span>
                     <span style="color:${statusColor}">${f.active ? "active" : "inactive"}</span>
                 </div>
-                <div style="font-size:9px;color:#8b949e">buffer ${f.buffer.toFixed(2)} · last upkeep ₿${(f.last_upkeep_value || 0).toFixed(2)}</div>
+                <div style="font-size:12px;color:#8b949e">buffer ${f.buffer.toFixed(2)} · last upkeep ₿${(f.last_upkeep_value || 0).toFixed(2)}</div>
             </div>`;
-        }).join("") || `<div style="font-size:9px;color:#8b949e">No forts under government control.</div>`;
+        }).join("") || `<div style="font-size:12px;color:#8b949e">No forts under government control.</div>`;
 
         const ownedImprovementRows = Object.entries(gov.owned_assets?.improvements || {})
             .map(([assetKey, assets]) => {
                 const profile = mapData?.government_profiles?.improvements?.[assetKey] || {};
                 const label = profile.label || String(assetKey).replace(/_/g, " ");
                 if (!Array.isArray(assets) || assets.length === 0) {
-                    return `<div style="font-size:9px;color:#8b949e">${label}: none</div>`;
+                    return `<div style="font-size:12px;color:#8b949e">${label}: none</div>`;
                 }
                 return `<div style="margin-top:4px">
-                    <div style="font-size:9px;color:#8b949e">${label}</div>
+                    <div style="font-size:12px;color:#8b949e">${label}</div>
                     ${assets.map(a => {
                         const statusColor = a.active ? "#3fb950" : "#f85149";
-                        return `<div style="display:flex;justify-content:space-between;font-size:9px;padding-left:6px">
+                        return `<div style="display:flex;justify-content:space-between;font-size:12px;padding-left:6px">
                             <span>cell ${a.cell}</span>
                             <span style="color:${statusColor}">${a.active ? "active" : "inactive"}</span>
                         </div>`;
@@ -606,7 +613,7 @@ function renderSelectedCityPanel(city, civ) {
             .map(([cityCell, holdings]) => {
                 const entries = Object.entries(holdings || {});
                 if (!entries.length) return "";
-                return `<div style="font-size:9px;margin-top:3px">city ${cityCell}: ${entries.map(([k, v]) => `${k} Lv.${v}`).join(", ")}</div>`;
+                return `<div style="font-size:12px;margin-top:3px">city ${cityCell}: ${entries.map(([k, v]) => `${k} Lv.${v}`).join(", ")}</div>`;
             }).join("");
 
         governmentSection = `
@@ -615,30 +622,34 @@ function renderSelectedCityPanel(city, civ) {
             <div>🏛 Treasury <span style="color:#58a6ff">₿${treasury.toFixed(2)}</span></div>
             <div>🧠 Disposition <span style="color:${dispositionColor}">${dispositionLabel}</span> · for ${dispTicks} ticks</div>
             <div>💸 Revenue ₿${revenue.toFixed(2)}/t · Build Spend ₿${buildSpend.toFixed(2)} · Fort Spend ₿${fortSpend.toFixed(2)}/t · Benefits ₿${benefitSpend.toFixed(2)}/t · Net <span style="color:${netGovColor}">₿${netGov.toFixed(2)}/t</span></div>
-            <div style="margin-top:4px;font-size:9px;color:#8b949e">Policy snapshot: tax ${ (taxRate * 100).toFixed(1) }% · activation on ${ (gov.fort_buffer_on || 0).toFixed(2) } · off ${ (gov.fort_buffer_off || 0).toFixed(2) }</div>
-            <div style="margin-top:6px;font-size:9px;color:#8b949e">All treasury flows</div>
+            <div style="margin-top:4px;font-size:12px;color:#8b949e">Policy snapshot: tax ${ (taxRate * 100).toFixed(1) }% · activation on ${ (gov.fort_buffer_on || 0).toFixed(2) } · off ${ (gov.fort_buffer_off || 0).toFixed(2) }</div>
+            <div style="margin-top:6px;font-size:12px;color:#8b949e">All treasury flows</div>
             ${flowRows}
-            <div style="margin-top:6px;font-size:9px;color:#8b949e">Government construction queue</div>
-            ${queueRows || `<div style="font-size:9px;color:#8b949e">No construction queued.</div>`}
-            <div style="margin-top:6px;font-size:9px;color:#8b949e">Fort upkeep basket (per funded fort/tick)</div>
-            ${upkeepRows || `<div style="font-size:9px;color:#8b949e">No upkeep goods configured.</div>`}
-            <div style="margin-top:6px;font-size:9px;color:#8b949e">Government-owned forts</div>
+            <div style="margin-top:6px;font-size:12px;color:#8b949e">Government construction queue</div>
+            ${queueRows || `<div style="font-size:12px;color:#8b949e">No construction queued.</div>`}
+            <div style="margin-top:6px;font-size:12px;color:#8b949e">Fort upkeep basket (per funded fort/tick)</div>
+            ${upkeepRows || `<div style="font-size:12px;color:#8b949e">No upkeep goods configured.</div>`}
+            <div style="margin-top:6px;font-size:12px;color:#8b949e">Government-owned forts</div>
             ${fortRows}
-            <div style="margin-top:6px;font-size:9px;color:#8b949e">Government-owned improvements</div>
-            ${ownedImprovementRows || `<div style="font-size:9px;color:#8b949e">None</div>`}
-            <div style="margin-top:6px;font-size:9px;color:#8b949e">Government-owned city buildings</div>
-            ${ownedBuildingRows || `<div style="font-size:9px;color:#8b949e">None</div>`}
+            <div style="margin-top:6px;font-size:12px;color:#8b949e">Government-owned improvements</div>
+            ${ownedImprovementRows || `<div style="font-size:12px;color:#8b949e">None</div>`}
+            <div style="margin-top:6px;font-size:12px;color:#8b949e">Government-owned city buildings</div>
+            ${ownedBuildingRows || `<div style="font-size:12px;color:#8b949e">None</div>`}
         </div>`;
     }
 
     cityPanelBody.innerHTML = `
-        <div class="city-panel-title">🏘 ${city.name}</div>
+        <div class="city-panel-title">${city.name}</div>
         <div class="city-panel-sub">${tags.join(" · ") || "City"}</div>
-        <div>👥 Pop ${city.population|0} · 💰 Gold ${city.gold|0}</div>
-        <div>💼 Workforce ${workforce} · Employed ${employed} · Unemployed ${unemployed}</div>
-        ${growthLine}
-        <div>🏦 Economy Size ₿${econOut.toFixed(1)}/t · 📈 Net Income <span style="color:${netColor}">₿${net.toFixed(2)}/t</span> · Per Person ₿${(city.income_per_person || 0).toFixed(3)}</div>
-        <div>🧭 Pull <span style="color:${pullColor}">${pull.toFixed(2)}</span> · <span style="color:${migColor}">${migArrow} ${migLabel}</span></div>
+        <div class="stat-grid">
+            <span class="stat-label">Population</span><span>${city.population|0} · ${city.gold|0} gold</span>
+            <span class="stat-label">Workforce</span><span><span style="color:var(--ac-grn)">${employed}</span> / ${workforce} · <span style="color:${unempColor}">${unemployed} idle</span></span>
+            <span class="stat-label">Growth</span><span style="color:${growthColor}">${fmtPct(growthPct)}/tick</span>
+            <span class="stat-label">Economy</span><span>₿${econOut.toFixed(1)}/t · net <span style="color:${netColor}">₿${net.toFixed(2)}</span></span>
+            <span class="stat-label">Per person</span><span>₿${(city.income_per_person || 0).toFixed(3)}</span>
+            <span class="stat-label">Pull</span><span style="color:${pullColor}">${pull.toFixed(2)} · <span style="color:${migColor}">${migArrow} ${migLabel}</span></span>
+        </div>
+        <div style="font-size:12px;color:var(--tx-3);margin-bottom:2px">food <span style="color:${foodColor}">${fmtPct(foodPct)}</span> · consumption <span style="color:${consColor}">${fmtPct(consPct)}</span> · unemployment <span style="color:${unempColorPanel}">${fmtPct(unempPct)}</span></div>
 
         <div class="city-panel-section">
             <div class="city-panel-section-label">Local Market (Supply / Demand · Price)</div>
@@ -648,8 +659,10 @@ function renderSelectedCityPanel(city, civ) {
         <div class="city-panel-section">
             <div class="city-panel-section-label">Buildings</div>
             ${buildingRows}
-            <div style="margin-top:6px;font-size:9px;color:#8b949e">🏛 Trading House Lv.${(city.buildings?.trading_house || 0)} · merchants ${(city.building_staffing?.trading_house || 0)}/${(city.buildings?.trading_house || 0)}</div>
-            <div style="font-size:9px">capacity ${(city.trade_capacity_required || 0).toFixed(1)}/${(city.trade_capacity_provided || 0).toFixed(1)} · exports ${(city.trade_export_volume || 0).toFixed(1)} · <span style="color:${((city.building_profit?.trading_house || city.trade_export_income || 0) >= 0) ? '#3fb950' : '#f85149'}">₿${(city.building_profit?.trading_house || city.trade_export_income || 0).toFixed(2)}/t</span></div>
+            ${!hasTHInDetails && (city.buildings?.trading_house || 0) > 0 ? `
+            <div style="margin-top:6px;font-size:12px;color:var(--tx-2)">Trading House Lv.${city.buildings.trading_house} · merchants ${(city.building_staffing?.trading_house || 0)}/${city.buildings.trading_house}</div>
+            <div style="font-size:12px">capacity ${(city.trade_capacity_required || 0).toFixed(1)}/${(city.trade_capacity_provided || 0).toFixed(1)} · exports ${(city.trade_export_volume || 0).toFixed(1)} · <span style="color:${((city.building_profit?.trading_house || city.trade_export_income || 0) >= 0) ? 'var(--ac-grn)' : 'var(--ac-red)'}">₿${(city.building_profit?.trading_house || city.trade_export_income || 0).toFixed(2)}/t</span></div>
+            ` : ""}
         </div>
 
         <div class="city-panel-section">
@@ -679,10 +692,9 @@ function renderCivDetail(civ, wars) {
         .sort((a, b) => b.population - a.population)
         .map(c => {
             const isSel = selectedCity && selectedCity.cell === c.cell;
-            return `<div class="detail-city${isSel ? " city-selected" : ""}" data-city-cell="${c.cell}">
-                ${c.is_capital ? "★" : "•"} <b>${c.name}</b>
-                <span>${c.population|0}p · 💰${c.gold|0} · 🌾${c.supply["grain"]|0}/${c.demand["grain"]|0}
-                ${c.near_river ? "〰" : ""}${c.coastal ? "⚓" : ""}</span>
+            return `<div class="detail-city${isSel ? " city-selected" : ""}" data-city-cell="${c.cell}" style="display:flex;justify-content:space-between">
+                <span>${c.is_capital ? "★" : "•"} <b>${c.name}</b></span>
+                <span>${c.population|0}p · ${c.gold|0}g${c.near_river ? " 〰" : ""}${c.coastal ? " ⚓" : ""}</span>
             </div>`;
         })
         .join("");
@@ -692,8 +704,8 @@ function renderCivDetail(civ, wars) {
         .join("");
 
     const aggr = civ.aggressiveness ?? 0.5;
-    const aggrColor = aggr > 0.65 ? "#f85149" : aggr > 0.4 ? "#f0c040" : "#3fb950";
-    const intColor = civ.integrity > 0.6 ? "#3fb950" : "#f85149";
+    const aggrColor = aggr > 0.65 ? "var(--ac-red)" : aggr > 0.4 ? "var(--ac-gold)" : "var(--ac-grn)";
+    const intColor = civ.integrity > 0.6 ? "var(--ac-grn)" : "var(--ac-red)";
     const allyNames = (civ.allies || [])
         .map(aid => gameState.civs.find(c => c.id === aid))
         .filter(Boolean)
@@ -707,15 +719,15 @@ function renderCivDetail(civ, wars) {
             ${!civ.alive ? '<span class="fallen-badge">FALLEN</span>' : ""}
         </div>
         ${civ.parent_name ? `<div class="detail-sub">From ${civ.parent_name}</div>` : ""}
-        <div class="detail-stats">
-            <div>👑 Leader: ${civ.leader}</div>
-            <div>👥 Pop: ${civ.population|0} · ⚔ Military: ${civ.military|0} · 📐 Land: ${civ.territory.length}</div>
-            <div>💰 Gold: ${civ.gold|0} · 🌾 Grain Out: ${civ.farm_output|0}</div>
-            <div>🔬 Tech: ${civ.tech.toFixed(1)} · 🎭 Culture: ${civ.culture.toFixed(1)}</div>
-            <div>🛡 Integrity: <span style="color:${intColor}">${(civ.integrity*100)|0}%</span> · 💢 Aggressiveness: <span style="color:${aggrColor}">${(aggr*100)|0}%</span></div>
-            <div>⚡ Power: ${civ.power|0}</div>
-            <div>⛏ Copper Ore/Copper: ${civ.ore_output|0}/${civ.metal_output|0} · 🧱 Stone: ${civ.stone_output|0} · 🛤 Roads: ${civ.roads.length}</div>
-            ${allyNames ? `<div>🤝 Allies: ${allyNames}</div>` : ""}
+        <div class="stat-grid" style="grid-template-columns:58px 1fr">
+            <span class="stat-label">Leader</span><span>${civ.leader}</span>
+            <span class="stat-label">Pop</span><span>${civ.population|0} · ${civ.territory.length} tiles · ${civ.military|0} mil</span>
+            <span class="stat-label">Treasury</span><span>${civ.gold|0} gold</span>
+            <span class="stat-label">Tech</span><span>${civ.tech.toFixed(1)} · culture ${civ.culture.toFixed(1)}</span>
+            <span class="stat-label">Integrity</span><span style="color:${intColor}">${(civ.integrity*100)|0}% · aggr <span style="color:${aggrColor}">${(aggr*100)|0}%</span></span>
+            <span class="stat-label">Power</span><span>${civ.power|0}</span>
+            <span class="stat-label">Output</span><span>🌾 ${civ.farm_output|0} · ⛏ ${civ.ore_output|0}/${civ.metal_output|0} · 🧱 ${civ.stone_output|0} · roads ${civ.roads.length}</span>
+            ${allyNames ? `<span class="stat-label">Allies</span><span>${allyNames}</span>` : ""}
         </div>
         ${cities ? `<div class="detail-section-label">CITIES (${civ.cities.length})</div>${cities}` : ""}
         ${myWars.length ? `<div class="detail-section-label war-label">⚔ WARS</div>${warInfo}` : warInfo}
@@ -818,9 +830,9 @@ function renderDiploScreen() {
                 <span style="color:#8b949e">vs</span>
                 <span class="war-name" style="color:${dfn.color}">${dfn.name}</span>
                 <span class="war-role def">Defender</span>
-                <span style="color:#6e7681;font-size:9px">· ${dur}yr</span>
+                <span style="color:#6e7681;font-size:12px">· ${dur}yr</span>
             </div>
-            <div style="display:grid;grid-template-columns:90px 1fr;gap:2px 8px;font-size:9px;color:#8b949e">
+            <div style="display:grid;grid-template-columns:90px 1fr;gap:2px 8px;font-size:12px;color:#8b949e">
                 <div>${att.name}</div>
                 <div>Conf ${(confA*100)|0}% · Exh ${(exhA*100)|0}% ${moraleBar(confA, exhA, att.color)}</div>
                 <div>${dfn.name}</div>
@@ -939,10 +951,10 @@ function showTooltip(x, y, info) {
                 const slots = b.slots || 0;
                 const mult = b.mult || 0;
                 const bTxt = slots > 0 && mult > 0 ? ` · bonus ${slots} @ +${(mult * 100).toFixed(0)}%` : "";
-                return `<div style="font-size:9px;display:flex;justify-content:space-between"><span>${icon} ${label}</span><span>${caps[k]}${bTxt}</span></div>`;
+                return `<div style="font-size:12px;display:flex;justify-content:space-between"><span>${icon} ${label}</span><span>${caps[k]}${bTxt}</span></div>`;
             })
             .join("");
-        return `<div style="margin-top:4px;border-top:1px solid #30363d;padding-top:4px;font-size:10px;color:#8b949e">Tile Capacity Contribution</div>${rows}`;
+        return `<div class="tt-section">Tile Capacity Contribution</div>${rows}`;
     };
 
     let lines = [
@@ -966,7 +978,7 @@ function showTooltip(x, y, info) {
         if (c.coastal) tags.push("⚓ Coast");
 
         lines.push(`<div style="font-weight:600;margin-top:2px">🏘 ${c.name}</div>`);
-        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:9px">${tags.join(" · ")}</div>`);
+        if (tags.length) lines.push(`<div style="color:#8b949e;font-size:12px">${tags.join(" · ")}</div>`);
         lines.push(`<div>👥 Pop ${c.pop}${c.founded ? ` · Est. yr ${c.founded}` : ""} · 💰 Gold ${c.gold}</div>`);
 
         // ── Employment ────────────────────────────────────────────────
@@ -974,7 +986,7 @@ function showTooltip(x, y, info) {
         const employed = c.employed_pop | 0;
         const unemployed = c.unemployed_pop | 0;
         const unempColor = unemployed === 0 ? "#3fb950" : (unemployed > employed ? "#f85149" : "#f0c040");
-        lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Employment</div>`);
+        lines.push(`<div class="tt-section">Employment</div>`);
         lines.push(`<div style="font-size:10px">💼 Workforce ${workforce} · <span style="color:#3fb950">Employed ${employed}</span> · <span style="color:${unempColor}">Unemployed ${unemployed}</span></div>`);
 
         // ── Migration ─────────────────────────────────────────────────
@@ -987,7 +999,7 @@ function showTooltip(x, y, info) {
         const consLvl = c.avg_consumption_level || 0;
         const growthRate = (c.population_growth_rate || 0) * 100.0;
         const growthColor = growthRate > 0.02 ? "#3fb950" : (growthRate < -0.02 ? "#f85149" : "#8b949e");
-        lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Migration</div>`);
+        lines.push(`<div class="tt-section">Migration</div>`);
         lines.push(`<div style="font-size:10px">🧭 Pull <span style="color:${pullColor}">${pull.toFixed(2)}</span> · <span style="color:${migColor}">${migArrow} ${migLabel}</span></div>`);
         lines.push(`<div style="font-size:10px">🛒 Avg Consumption Tier ${consLvl.toFixed(2)}</div>`);
         lines.push(`<div style="font-size:10px">📈 Growth <span style="color:${growthColor}">${growthRate >= 0 ? "+" : ""}${growthRate.toFixed(2)}%</span> / tick</div>`);
@@ -999,12 +1011,12 @@ function showTooltip(x, y, info) {
         const foodColor = foodGrowth > 0 ? "#3fb950" : "#f85149";
         const penaltyColor = consumPenalty < 0 ? "#f85149" : "#8b949e";
         const unempPenaltyColor = unempPenalty < 0 ? "#f85149" : "#8b949e";
-        lines.push(`<div style="font-size:9px; color:#8b949e">  • Food: <span style="color:${foodColor}">${foodGrowth >= 0 ? "+" : ""}${foodGrowth.toFixed(2)}%</span> | Consumption: <span style="color:${penaltyColor}">${consumPenalty >= 0 ? "+" : ""}${consumPenalty.toFixed(2)}%</span> | Unemployment: <span style="color:${unempPenaltyColor}">${unempPenalty >= 0 ? "+" : ""}${unempPenalty.toFixed(2)}%</span></div>`);
+        lines.push(`<div style="font-size:12px; color:#8b949e">  • Food: <span style="color:${foodColor}">${foodGrowth >= 0 ? "+" : ""}${foodGrowth.toFixed(2)}%</span> | Consumption: <span style="color:${penaltyColor}">${consumPenalty >= 0 ? "+" : ""}${consumPenalty.toFixed(2)}%</span> | Unemployment: <span style="color:${unempPenaltyColor}">${unempPenalty >= 0 ? "+" : ""}${unempPenalty.toFixed(2)}%</span></div>`);
 
         // ── Income breakdown ──────────────────────────────────────────
         const incColor = c.income_total > 0 ? "#3fb950" : c.income_total < 0 ? "#f85149" : "#8b949e";
         const econSize = c.economic_output || 0;
-        lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Economy (gold/tick)</div>`);
+        lines.push(`<div class="tt-section">Economy (gold/tick)</div>`);
         lines.push(`<div style="font-size:10px">🏦 Economy Size ₿${econSize.toFixed(1)} <span style="color:#8b949e">(gross throughput)</span></div>`);
         lines.push(`<div style="font-size:10px">Net <span style="color:${incColor}">₿${c.income_total.toFixed(2)}</span> · Per person <span style="color:${incColor}">₿${c.income_per_person.toFixed(3)}</span></div>`);
         const goodsIn = getGoodKeys();
@@ -1019,18 +1031,18 @@ function showTooltip(x, y, info) {
             if (dom >= 0.05) parts.push(`<span style="color:#c9d1d9">prod ${dom.toFixed(1)}</span>`);
             if (exp >= 0.05) parts.push(`<span style="color:#d299ff">exp +${exp.toFixed(1)}</span>`);
             if (imp >= 0.05) parts.push(`<span style="color:#58a6ff">imp -${imp.toFixed(1)}</span>`);
-            lines.push(`<div style="font-size:9px; display:flex; justify-content:space-between">
+            lines.push(`<div style="font-size:12px; display:flex; justify-content:space-between">
                 <span>${goodIcon(g)} ${g}</span>
                 <span>${parts.join(" · ")} = <span style="color:${nColor}">${net.toFixed(1)}</span></span>
             </div>`);
         }
         if (c.income_misc >= 0.05) {
-            lines.push(`<div style="font-size:9px">✦ Gold resource +${c.income_misc.toFixed(1)}</div>`);
+            lines.push(`<div style="font-size:12px">✦ Gold resource +${c.income_misc.toFixed(1)}</div>`);
         }
 
         const goods = getGoodKeys();
         
-        lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">Local Market (Supply / Demand · Price)</div>`);
+        lines.push(`<div class="tt-section">Local Market (Supply / Demand · Price)</div>`);
 
         for (const g of goods) {
             const supply = c.supply[g] || 0;
@@ -1055,7 +1067,7 @@ function showTooltip(x, y, info) {
                     const type = totalVol > 0 ? "Import" : "Export";
                     const tColor = totalVol > 0 ? "#58a6ff" : "#d299ff";
                     const partners = trades.length > 1 ? `×${trades.length}` : "";
-                    tradeLine = `<span style="color:${tColor}; margin-left:4px; font-size:9px">[${type}${partners} ${absVol.toFixed(1)} @ ₿${avgP.toFixed(2)}]</span>`;
+                    tradeLine = `<span style="color:${tColor}; margin-left:4px; font-size:12px">[${type}${partners} ${absVol.toFixed(1)} @ ₿${avgP.toFixed(2)}]</span>`;
                 }
             }
 
@@ -1106,7 +1118,7 @@ function showTooltip(x, y, info) {
         const bDetails = c.building_details || [];
         const bKeys = Object.keys(bLevels).filter(k => (bLevels[k] || 0) > 0);
         if (bKeys.length) {
-            lines.push(`<div style="margin-top:4px; border-top:1px solid #30363d; padding-top:4px; font-size:10px; color:#8b949e">City Buildings</div>`);
+            lines.push(`<div class="tt-section">City Buildings</div>`);
             for (const key of bKeys) {
                 const d = bDetails.find(x => x.key === key) || null;
                 const lvl = d ? (d.level || 0) : (bLevels[key] || 0);
@@ -1121,7 +1133,7 @@ function showTooltip(x, y, info) {
                     ? Object.entries(d.outputs).map(([g, a]) => `${a} ${g}`).join(", ")
                     : "-";
                 lines.push(`<div style="font-size:10px; display:flex; justify-content:space-between"><span>🏭 ${name} Lv.${lvl} · 👥 ${staffed}/${lvl}</span><span style="color:${pColor}">₿${prof.toFixed(2)}/t</span></div>`);
-                lines.push(`<div style="font-size:9px; color:#8b949e">in: ${inTxt || "-"} · out: ${outTxt || "-"}</div>`);
+                lines.push(`<div style="font-size:12px; color:#8b949e">in: ${inTxt || "-"} · out: ${outTxt || "-"}</div>`);
             }
 
             const tradeLv = bLevels.trading_house || 0;
@@ -1132,8 +1144,8 @@ function showTooltip(x, y, info) {
             const tradeCapProv = c.trade_capacity_provided || 0;
             if (tradeLv > 0 || tradeVol > 0 || tradeProfit > 0 || tradeCapReq > 0 || tradeCapProv > 0) {
                 const tradeColor = tradeProfit >= 0 ? "#3fb950" : "#f85149";
-                lines.push(`<div style="margin-top:6px;font-size:9px;color:#8b949e">🏛 Trading House Lv.${tradeLv} · merchants ${tradeStaff}/${tradeLv}</div>`);
-                lines.push(`<div style="font-size:9px">capacity ${tradeCapReq.toFixed(1)}/${tradeCapProv.toFixed(1)} · exports ${tradeVol.toFixed(1)} · <span style="color:${tradeColor}">₿${tradeProfit.toFixed(2)}/t</span></div>`);
+                lines.push(`<div style="margin-top:6px;font-size:12px;color:#8b949e">🏛 Trading House Lv.${tradeLv} · merchants ${tradeStaff}/${tradeLv}</div>`);
+                lines.push(`<div style="font-size:12px">capacity ${tradeCapReq.toFixed(1)}/${tradeCapProv.toFixed(1)} · exports ${tradeVol.toFixed(1)} · <span style="color:${tradeColor}">₿${tradeProfit.toFixed(2)}/t</span></div>`);
             }
         }
     }
@@ -1169,23 +1181,25 @@ function showTooltip(x, y, info) {
 
             lines.push(`<div style="margin-top:6px;border-top:1px solid #30363d;padding-top:4px">`);
             lines.push(`<div style="font-weight:600">⚔ ${a.commander}</div>`);
-            lines.push(`<div style="color:${a.owner_color};font-size:9px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
+            lines.push(`<div style="color:${a.owner_color};font-size:12px">${a.owner_name} · Fort Lv.${a.fort_level}</div>`);
             lines.push(`<div style="color:${bColor};font-size:10px">${bLabel}</div>`);
             if (a.target_name) {
-                lines.push(`<div style="color:#8b949e;font-size:9px">→ ${a.target_name}</div>`);
+                lines.push(`<div style="color:#8b949e;font-size:12px">→ ${a.target_name}</div>`);
             }
             lines.push(`<div style="color:#8b949e">💪 Strength: <span style="color:${sColor}">${a.strength.toFixed(0)}/${a.max_strength.toFixed(0)}</span></div>`);
             lines.push(`<div style="color:#8b949e">🎯 Organization: <span style="color:${oColor}">${a.organization.toFixed(0)}%</span> · 🍖 Supply: <span style="color:${supColor}">${a.supply.toFixed(0)}%</span></div>`);
             if (fortPct > 0) {
-                lines.push(`<div style="color:#8b949e">🏯 Fortification: <span style="color:${fortColor}">+${fortPct}%</span> <span style="font-size:9px">(${a.fort_source || "open field"})</span></div>`);
+                lines.push(`<div style="color:#8b949e">🏯 Fortification: <span style="color:${fortColor}">+${fortPct}%</span> <span style="font-size:12px">(${a.fort_source || "open field"})</span></div>`);
             } else {
-                lines.push(`<div style="color:#8b949e;font-size:9px">🏯 Open field (no fortification)</div>`);
+                lines.push(`<div style="color:#8b949e;font-size:12px">🏯 Open field (no fortification)</div>`);
             }
-            lines.push(`<div style="color:#8b949e;font-size:9px">⭐ Skill ×${a.skill.toFixed(2)}</div>`);
+            lines.push(`<div style="color:#8b949e;font-size:12px">⭐ Skill ×${a.skill.toFixed(2)}</div>`);
             lines.push(`</div>`);
         }
     }
     tooltip.innerHTML = lines.filter(Boolean).join("");
+    tooltip.style.fontFamily = "'Crimson Pro', Georgia, serif";
+    tooltip.style.fontSize   = "11px";
     tooltip.style.display = "block";
     tooltip.style.left = `${x + 10}px`;
     tooltip.style.top  = `${y + 10}px`;
