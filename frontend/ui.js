@@ -639,7 +639,7 @@ function renderSelectedCityPanel(city, civ) {
     }
 
     cityPanelBody.innerHTML = `
-        <div class="city-panel-title">${city.name}</div>
+        <div class="city-panel-title">🏘 ${city.name}</div>
         <div class="city-panel-sub">${tags.join(" · ") || "City"}</div>
         <div class="stat-grid">
             <span class="stat-label">Population</span><span>${city.population|0} · ${city.gold|0} gold</span>
@@ -796,12 +796,12 @@ function renderDiploScreen() {
     const byPower = [...alive].sort((a, b) => (b.power || 0) - (a.power || 0));
     const maxPow = Math.max(1, byPower[0].power || 0);
     const powerList = byPower.map(c => {
-        const w = Math.max(4, ((c.power || 0) / maxPow * 140) | 0);
+        const pct = Math.max(1, (c.power || 0) / maxPow * 100);
         return `<div class="power-row">
             <span class="dot" style="background:${c.color}"></span>
             <span class="pname">${c.name}</span>
-            <span class="pbar" style="width:${w}px"><span style="width:100%;background:${c.color}"></span></span>
-            <span style="color:#8b949e">${(c.power||0)|0}</span>
+            <span class="pbar"><span style="width:${pct.toFixed(1)}%;background:${c.color}"></span></span>
+            <span class="pval" style="color:#8b949e">${(c.power||0)|0}</span>
         </div>`;
     }).join("");
 
@@ -1241,6 +1241,15 @@ btnReset.addEventListener("click", () => {
 
 selSpeed.addEventListener("change", () => {
     ws.send(JSON.stringify({ action: "speed", value: parseFloat(selSpeed.value) }));
+});
+
+document.addEventListener("visibilitychange", () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (document.hidden) {
+        if (playing) ws.send(JSON.stringify({ action: "pause" }));
+    } else {
+        if (playing) ws.send(JSON.stringify({ action: "play" }));
+    }
 });
 
 const MAP_MODE_CYCLE = ["terrain", "political", "armies", "resource"];

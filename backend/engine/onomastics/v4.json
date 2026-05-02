@@ -1,0 +1,9 @@
+{
+    "PRE": ["Uz", "Turz", "Bukh", "An", "Fer", "Kho", "Abdu", "Kara", "Kahra", "Ahra", "Ara", "Sur", "Sura", "Surxa", "Oxia", "Oz", "Ox", "Nav", "Sard", "Sird", "Tash", "Sihr", "Nahma", "Qar", "Marg", "Chuch", "Rusl", "Dim", "It"],
+    "MID_S": ["darya", "mol", "sat", "sama", "ha", "ar", "xon", "ondary", "tary", "tar", "kal", "zakh", "akh", "gan", "gil", "rezm", "res", "ka", "ark", "arka", "shi", "kan", "kant", "an"],
+    "SUF_S": ["ov","an", "am", "ent", "ant", "and", "kand", "us", "ovn", "tsarov", "tsarvo", "azov", "ur", "ana", "ara", "man", "vara", "sa"],
+    "CPRE": ["Time-worn","Honored","Blessed","Perfumed","Fragrant","Old","New","Far","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","",""],
+    "CSUF": ["rov", "tan", "sen", "mand", "hand", "khand", "shi", "sin", "nasn", "shahir", "nogir", "giln", "avny", "tary", "vsara", "vara", "vatlar", "vus", "uvsu", "tov", "vear", "visir", "le", "daryo", "darya", "gana", "ganar", "tsana", "lane", "luk", "sabz", "shahaz"],
+    "LF": ["Bobur","Ulugbek","Sherzod","Jahongir","Behruz","Nodir","Sanjar","Temur","Otabek","Sardor","Jamshid","Jasur","Muzaffar","Alisher","Ismoil","Qodir","Mansur","Anvar","Umid","Zafar","Mirzo","Firdavs","Dilshod","Bahodir","Bekzod","Rustam","Hamid","Tohir","Doniyor","Eldor","Ravshan","Shamsiddin","Nuriddin","Husan","Kamol","Akbar","Hayot","Lochinbek","Sulton","Asliddin"],
+    "LL": ["the Bold","the Wise","the Terrible","the Great","the Just","the Pious","the Bright","the Shining","the Old","the Ancient","the Blessed","the Cunning","the Brave","the Long-armed","the Pale","the Dark","the Red","the Holy","the Golden","the Silver","the Ironhearted","the Serene","the Stern","the Meek","the Bear","the Wolf","the Falcon","Lightbringer"]
+}

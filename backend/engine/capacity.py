@@ -103,6 +103,17 @@ PRODUCER_BUILDINGS: dict[str, dict] = {
         "focus": "MINE",
         "professions": {"miner": 9, "aristocrat": 1},
     },
+    "sapphire_mine": {
+        "label": "Sapphire Mine",
+        "icon": "⛓",
+        "good": "sapphires",
+        "eff_good": "sapphires",
+        "base_output": 0.5,
+        "input_good": None,
+        "input_per_level": 0.0,
+        "focus": "MINE",
+        "professions": {"miner": 9, "aristocrat": 1},
+    },
     "port": {
         "label": "Port",
         "icon": "⚓",
@@ -183,6 +194,7 @@ def compute_tile_capacity(
     stone_eff = _eff(good_efficiency, "stone", cell)
     copper_eff = _eff(good_efficiency, "copper_ore", cell)
     iron_eff = _eff(good_efficiency, "iron_ore", cell)
+    sapphire_eff = _eff(good_efficiency, "sapphires", cell)
 
     fertile = 0.0
     openness = 0.0
@@ -234,6 +246,7 @@ def compute_tile_capacity(
         "quarry": max(0, int(round(0 + 4 * rugged + (12 if r == "stone" else 0)))),
         "copper_mine": max(0, int(round(0 + 0 * rugged + (8 if r == "gold" else 0) + 3 * copper_eff))),
         "iron_mine": max(0, int(round((8 + 0.0 * rugged + 12 * iron_eff) if r == "iron" else (1 + 2.5 * rugged * max(0.0, iron_eff - 0.9))))),
+        "sapphire_mine": max(0, rugged * sapphire_eff),
         "port": max(0, int(round(coastal_factor * (5 + 9 * (0.5 + 0.5 * grain_eff))))),
         "pasture": max(0, int(round((0 + 2 * fertile + 4 * openness)))),
     }

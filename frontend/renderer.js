@@ -763,13 +763,17 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
             }
 
             if (showLabel) {
-                const ls = city.is_capital ? 7.5 : 6;
+                const base = city.is_capital ? 7.5 : 6;
+                // Shrink gently with zoom so labels don't balloon; sqrt keeps
+                // them readable at all zoom levels.
+                const ls = Math.max(4, base / Math.sqrt(zoom));
+                const lw = Math.max(0.4, 1.8 / zoom);
                 const label = city.name;
                 ctx.font         = `700 ${ls}px 'Cinzel', serif`;
                 ctx.textAlign    = "center";
                 ctx.textBaseline = "bottom";
                 ctx.strokeStyle  = "rgba(0,0,0,.7)";
-                ctx.lineWidth    = 2;
+                ctx.lineWidth    = lw;
                 ctx.strokeText(label, px, py - sz - 2);
                 ctx.fillStyle    = city.is_capital ? "#ffd700" : "#eee";
                 ctx.fillText(label, px, py - sz - 2);
@@ -798,15 +802,21 @@ export function renderFrame(ctx, mapData, state, opts = {}) {
         const cx2 = sx / civ.territory.length, cy2 = sy / civ.territory.length;
         const px = cx2 * CELL + CELL / 2, py = cy2 * CELL + CELL / 2;
 
+        // Fade country names out as you zoom in — at close range they're
+        // irrelevant and obscure the map.
+        const civNameAlpha = Math.max(0, Math.min(1, (3.5 - zoom) / 1.5));
+        if (civNameAlpha <= 0) continue;
+
         const atWar = wars.some(w => w.att === civ.id || w.def_id === civ.id);
         ctx.font         = `900 ${fs}px 'Cinzel', serif`;
         ctx.textAlign    = "center";
         ctx.textBaseline = "middle";
-        ctx.strokeStyle  = "rgba(0,0,0,.6)";
+        ctx.strokeStyle  = `rgba(0,0,0,${0.6 * civNameAlpha})`;
         ctx.lineWidth    = 3;
         ctx.strokeText(civ.name.toUpperCase(), px, py);
-        ctx.fillStyle    = civ.color;
-        ctx.shadowColor  = atWar ? "#f33" : civ.color;
+        const { r, g, b } = _hexToRgb(civ.color);
+        ctx.fillStyle    = `rgba(${r},${g},${b},${civNameAlpha})`;
+        ctx.shadowColor  = atWar ? `rgba(255,51,51,${civNameAlpha})` : `rgba(${r},${g},${b},${civNameAlpha})`;
         ctx.shadowBlur   = atWar ? 6 : 3;
         ctx.fillText(civ.name.toUpperCase(), px, py);
         ctx.shadowBlur   = 0;

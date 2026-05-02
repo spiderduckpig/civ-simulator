@@ -430,7 +430,7 @@ async def _sim_loop(ws: WebSocket, state: GameState, lock: asyncio.Lock):
                 new_civs = tick_sim(
                     civs, md.ter, md.res, state.om, state.wars,
                     md.rivers, state.impr, t, state.add_event, state.params,
-                    md.good_efficiency,
+                    md.hm, md.good_efficiency,
                 )
                 civs.extend(new_civs)
                 state.tick = t

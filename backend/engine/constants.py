@@ -1,3 +1,5 @@
+import math
+
 from .models import GoodSpec, GovernmentOwnershipProfile
 
 W, H, CELL = 120, 80, 6
@@ -243,6 +245,18 @@ FOCUS_HMM_PERIOD        = 12     # how often a city reconsiders its focus
 # fraction of levels that are actually staffed. See engine.employment.
 N_EMPLOYEES_PER_LEVEL   = 10
 
+GOLD_INCOME_MULT        = 1.6   # global gold production multiplier (tune for balance)
+PEACE_COOLDOWN_TICKS    = 300   # ticks before two civs can fight again after peace
+
+# ── Price curve ───────────────────────────────────────────────────────────────
+PRICE_MULT_MIN        = 0.001
+PRICE_MULT_MAX        = 20.0
+PRICE_CURVE_STEEPNESS = 3.5
+PRICE_CURVE_SPAN      = PRICE_MULT_MAX - PRICE_MULT_MIN
+PRICE_CURVE_ANCHOR    = 1.0 + math.log(
+    (PRICE_CURVE_SPAN / (1.0 - PRICE_MULT_MIN)) - 1.0
+) / PRICE_CURVE_STEEPNESS
+
 # ── Economy ──
 GOOD_SPECS: dict[str, GoodSpec] = {
     "grain": GoodSpec("grain", "Grain", "🌾", 1.0, tradable=True),
@@ -278,8 +292,8 @@ TRADABLE_GOODS = [
 
 # Trade / Arbitrage constants
 TRADE_PERIOD_TICKS = 5
-TRANSPORT_COST_PER_DIST = 0.5
-TRADE_HOUSE_CAPACITY_PER_EMPLOYEE = 10.0
+TRANSPORT_COST_PER_DIST = 0.1
+TRADE_HOUSE_CAPACITY_PER_EMPLOYEE = 20.0
 
 # Expansion cap: civs stop claiming new territory once they exceed this
 # tiles-per-city ratio (until they found/capture more cities).

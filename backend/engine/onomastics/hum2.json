@@ -1,9 +1,0 @@
-{
-    "PRE": ["Bor","Gat","Kra","Thor","Arn","Sve","Olf","Fen","Hal","Sten","Vid","Tor","Knu","Gun","Leif","Frey","Tir","Ran","Mal","Kor","Hag","Gar"],
-    "MID_S": ["an","ar","or","in","en","ok","ir","ul","ag","ek"],
-    "SUF_S": ["a","i","o","ik","is","ak","ok","uk","ek","as","es","us","on"],
-    "CPRE": ["Iron","Stone","Bear","Wolf","North","Dark","Red","Black","Hawk","Frost","","","","",""],
-    "CSUF": ["hold","fort","keep","town","port","gate","wall","watch","post","mill","ford","bridge","borg","heim"],
-    "LF": ["Gorak","Kragen","Darnok","Valen","Orik","Boran","Kael","Thane","Morok","Torin","Gareth","Ulf","Hagar","Korin","Varis","Sven","Ragnar","Ivar","Sten","Hakon"],
-    "LL": ["the Bold","the Red","Ironfist","the Stout","Bear-slayer","the Grim","Stormcaller","the Cold","the Scarred","the Wolf","the Strong","the Swift"]
-}

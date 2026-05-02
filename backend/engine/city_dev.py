@@ -11,6 +11,7 @@ from .constants import (
     INVEST_PERIOD_TICKS, FOCUS_HMM_PERIOD,
     FORT_BUILD_METAL_COST, BASE_PRICES, N_EMPLOYEES_PER_LEVEL,
     TRADE_HOUSE_CAPACITY_PER_EMPLOYEE,
+    PRICE_MULT_MIN, PRICE_CURVE_SPAN, PRICE_CURVE_ANCHOR, PRICE_CURVE_STEEPNESS,
 )
 from . import employment
 from .employment import STAFFABLE_TYPES as _STAFFABLE
@@ -141,14 +142,47 @@ def _try_build_city_buildings(city: City, impr: list) -> bool:
             target = min(int(targets.get(key, cur_lvl)), b.max_level)
             if cur_lvl >= target:
                 continue
-            virtual_staffed = int(staffing.get(key, 0)) + filled.get(key, 0)
-            if cur_lvl - virtual_staffed > 0:
-                continue
+            if remaining_unemployed >= N_EMPLOYEES_PER_LEVEL:
+                virtual_staffed = int(staffing.get(key, 0)) + filled.get(key, 0)
+                if cur_lvl - virtual_staffed > 0:
+                    continue
             if key == "trading_house":
-                trade_income = float(getattr(city, "trade_export_income", 0.0) or 0.0)
-                trade_potential = float(getattr(city, "trade_potential", 0.0) or 0.0)
-                pop_fallback = float(getattr(city, "population", 0.0) or 0.0) * 0.15 + 4.0
-                score = max(trade_income, trade_potential, pop_fallback) - (_building_upgrade_cost(city, key, cur_lvl) / BUILDING_PAYBACK_TICKS)
+                trade_profit = employment._building_profit_per_level(city, key)
+                trade_required = float(getattr(city, "trade_capacity_required", 0.0) or 0.0)
+                trade_provided = float(getattr(city, "trade_capacity_provided", 0.0) or 0.0)
+
+                # If we already have a measurable trade profit signal, use it.
+                # Otherwise estimate a sensible per-level value from available
+                # signals (volume, required capacity, or a population fallback)
+                # so the first trading house levels can be justified by ROI.
+                projected_profit = trade_profit
+
+                if projected_profit <= 0.0:
+                    trade_volume = float(getattr(city, "trade_export_volume", 0.0) or 0.0)
+                    pop = max(1.0, float(getattr(city, "population", 0.0) or 0.0))
+                    pop_fallback = pop * 0.15 + 4.0
+                    est_volume = max(trade_volume, trade_required, pop_fallback)
+
+                    # Estimate an average value-per-volume unit. Prefer the
+                    # observed average if available; otherwise fall back to a
+                    # conservative fraction of the base-price mean.
+                    avg_val = 0.0
+                    if trade_volume > 0.0:
+                        avg_val = float(getattr(city, "trade_export_income", 0.0) or 0.0) / trade_volume
+                    else:
+                        avg_base = sum(BASE_PRICES.values()) / max(1, len(BASE_PRICES))
+                        avg_val = avg_base * 0.25
+
+                    # Per staffed-level capacity-worth profit estimate.
+                    projected_profit = avg_val * TRADE_HOUSE_CAPACITY_PER_EMPLOYEE
+
+                # If capacity is nearly saturated, additional levels are
+                # worth more than the current average — apply the same
+                # headroom multiplier used elsewhere.
+                if trade_provided > 0.0 and trade_required > trade_provided * 0.9:
+                    projected_profit *= min(2.0, trade_required / trade_provided)
+
+                score = projected_profit - (_building_upgrade_cost(city, key, cur_lvl) / BUILDING_PAYBACK_TICKS)
                 if score > best_score:
                     best_score = score
                     best_key = key
@@ -724,24 +758,18 @@ def _develop_producer_buildings(
     capacities = getattr(city, "capacities", None) or {}
     shared = getattr(city, "shared_capacities", None) or {}
 
-    targets = _estimate_target_producer_levels(city)
-
     any_action = False
     unemployed = int(getattr(city, "unemployed_pop", 0) or 0)
-    # Remove hard cap per-tick so cities may expand until targets, gold,
-    # or labour limits are reached. Still bounded by unemployed labour.
-    max_actions = max(3, unemployed // N_EMPLOYEES_PER_LEVEL + 2)
     payback = _effective_capex_payback(city)
 
-    for _ in range(max_actions):
+    while unemployed >= N_EMPLOYEES_PER_LEVEL:
         best_key: Optional[str] = None
-        best_score = 0.0
+        best_score = -float("inf")
 
         for key in PRODUCER_BUILDINGS.keys():
             cur_level = int(buildings.get(key, 0))
             cap = int(capacities.get(key, 0))
-            target = min(int(targets.get(key, cur_level)), cap)
-            if cur_level >= target:
+            if cur_level >= cap:
                 continue
 
             if key in ("farm", "cotton_farm"):
@@ -751,6 +779,9 @@ def _develop_producer_buildings(
                     continue
 
             margin = _producer_margin(city, key)
+            if margin <= 0.0:
+                continue
+
             cost = _producer_upgrade_cost(city, key, cur_level)
             score = margin - (cost / payback)
             if score > best_score:
@@ -766,7 +797,7 @@ def _develop_producer_buildings(
 
         buildings[best_key] = int(buildings.get(best_key, 0)) + 1
         any_action = True
-        unemployed = max(0, unemployed - N_EMPLOYEES_PER_LEVEL)
+        unemployed -= N_EMPLOYEES_PER_LEVEL
 
     city.buildings = buildings
     return any_action
@@ -815,13 +846,6 @@ def _producer_margin(city: City, key: str) -> float:
 #
 # These constants must mirror the price curve in simulation._get_price.
 # Duplicated here to avoid a circular import (simulation imports city_dev).
-_PRICE_MULT_MIN = 0.03
-_PRICE_MULT_MAX = 20.0
-_PRICE_CURVE_STEEPNESS = 5.5
-_PRICE_CURVE_SPAN = _PRICE_MULT_MAX - _PRICE_MULT_MIN
-_PRICE_CURVE_ANCHOR = 1.0 + math.log(
-    (_PRICE_CURVE_SPAN / (1.0 - _PRICE_MULT_MIN)) - 1.0
-) / _PRICE_CURVE_STEEPNESS
 
 
 def _supply_at_price(good: str, demand: float, target_price: float) -> float:
@@ -836,13 +860,13 @@ def _supply_at_price(good: str, demand: float, target_price: float) -> float:
     if base <= 0.0 or demand <= 0.0:
         return 0.0
     m = target_price / base
-    if m >= _PRICE_MULT_MIN + _PRICE_CURVE_SPAN:
+    if m >= PRICE_MULT_MIN + PRICE_CURVE_SPAN:
         return 0.0
-    if m <= _PRICE_MULT_MIN:
+    if m <= PRICE_MULT_MIN:
         return float("inf")
-    f = (m - _PRICE_MULT_MIN) / _PRICE_CURVE_SPAN
+    f = (m - PRICE_MULT_MIN) / PRICE_CURVE_SPAN
     f = max(1e-9, min(1.0 - 1e-9, f))
-    ratio = _PRICE_CURVE_ANCHOR - math.log((1.0 - f) / f) / _PRICE_CURVE_STEEPNESS
+    ratio = PRICE_CURVE_ANCHOR - math.log((1.0 - f) / f) / PRICE_CURVE_STEEPNESS
     if ratio <= 0.0:
         return float("inf")
     return demand / ratio
@@ -928,7 +952,7 @@ def _estimate_target_producer_levels(city: City) -> dict[str, int]:
                 tgt = cap
             else:
                 add = max(0.0, tgt_supply - accumulated) / q_eff
-                tgt = min(cap, cur + int(add))
+                tgt = min(cap, cur + int(math.ceil(add)) if add > 1e-9 else cur)
             targets[key] = max(cur, tgt)
             accumulated += q_eff * (targets[key] - cur)
 
@@ -1015,10 +1039,21 @@ def _estimate_target_building_levels(city: City) -> dict[str, int]:
     for key, b in BUILDING_TYPES.items():
         cur = int(blevels.get(key, 0))
         if key == "trading_house":
-            trade_potential = float(getattr(city, "trade_potential", 0.0) or 0.0)
+            trade_volume = float(getattr(city, "trade_export_volume", 0.0) or 0.0)
+            trade_required = float(getattr(city, "trade_capacity_required", 0.0) or 0.0)
+            trade_provided = float(getattr(city, "trade_capacity_provided", 0.0) or 0.0)
             pop_fallback = float(getattr(city, "population", 0.0) or 0.0) * 0.15 + 4.0
-            target_volume = max(trade_potential, pop_fallback)
-            targets[key] = min(b.max_level, max(cur, int(math.ceil(target_volume / TRADE_HOUSE_CAPACITY_PER_EMPLOYEE))))
+
+            target_volume = max(trade_volume, trade_required, pop_fallback)
+            if trade_provided > 0.0 and trade_required > trade_provided * 0.9:
+                # Keep a little headroom if the house is already near
+                # saturation so the build target doesn't flatten too early.
+                target_volume = max(target_volume, trade_required * 1.1)
+
+            targets[key] = min(
+                b.max_level,
+                max(cur, int(math.ceil(target_volume / TRADE_HOUSE_CAPACITY_PER_EMPLOYEE))),
+            )
             continue
         if not b.outputs:
             targets[key] = cur

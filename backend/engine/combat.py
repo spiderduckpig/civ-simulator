@@ -233,17 +233,20 @@ def _descend_field(
         cur_d = field[my_cell]
         if cur_d == 0:
             break
-        best_n = -1
         best_d = cur_d
+        candidates: list[int] = []
         for n in neighbors(my_cell):
             if n in occupied or n in blocked_enemy:
                 continue
             d = field.get(n)
-            if d is None:
+            if d is None or d >= best_d:
                 continue
             if d < best_d:
                 best_d = d
-                best_n = n
+                candidates = [n]
+            else:
+                candidates.append(n)
+        best_n = random.choice(candidates) if candidates else -1
         if best_n >= 0:
             occupied.discard(my_cell)
             occupied.add(best_n)
@@ -255,8 +258,8 @@ def _descend_field(
 
         # Frontline rotation: if blocked by a weaker/retreating friendly,
         # allow a one-cell swap so fresh armies can move through chokepoints.
-        swap_n = -1
         swap_d = cur_d
+        swap_candidates: list[int] = []
         for n in neighbors(my_cell):
             other = friendly_by_cell.get(n)
             if other is None or other is army:
@@ -275,9 +278,13 @@ def _descend_field(
             if not (mine_ready and (other_retreat or other_weak)):
                 continue
 
-            swap_n = n
-            swap_d = d
+            if d < swap_d:
+                swap_d = d
+                swap_candidates = [n]
+            else:
+                swap_candidates.append(n)
 
+        swap_n = random.choice(swap_candidates) if swap_candidates else -1
         if swap_n < 0:
             break
 
@@ -303,7 +310,9 @@ def _update_supply(army: Army, impr: list, om: list) -> None:
 
     raw = impr[cur] if 0 <= cur < N else 0
     it = imp_type(raw)
-    if it in (IMP.FARM, IMP.COTTON, IMP.PASTURE, IMP.FISHERY):
+    on_farm = it in (IMP.FARM, IMP.COTTON, IMP.PASTURE, IMP.FISHERY)
+    at_home = d <= ARMY_SUPPLY_FREE_DIST and 0 <= cur < N and om[cur] == army.civ_id
+    if on_farm or at_home:
         army.supply = min(100.0, army.supply + ARMY_SUPPLY_REPLEN)
 
     army.supply = max(0.0, army.supply - decay)

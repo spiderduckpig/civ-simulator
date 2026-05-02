@@ -292,6 +292,7 @@ class Civ(ModelMeta):
     government: Government = field(default_factory=Government)
     metal_stock: float = 0.0
     fort_cooldowns: Dict[int, int] = field(default_factory=dict)
+    peace_cooldowns: Dict[str, int] = field(default_factory=dict)  # {str(civ_id): tick}
     disposition: str = "calm"
     disposition_ticks: int = 0
     disposition_targets: List[int] = field(default_factory=list)
@@ -345,6 +346,8 @@ class War(ModelMeta):
     exhaustion_d: float
     armies_a: List[Army] = field(default_factory=list)
     armies_d: List[Army] = field(default_factory=list)
+    att_side: List[int] = field(default_factory=list)  # all civ IDs on attacker's side
+    def_side: List[int] = field(default_factory=list)  # all civ IDs on defender's side
     ended: bool = False
     # Pre-war territory snapshots — used by the peace-settlement logic to
     # decide which captured tiles permanently change hands.

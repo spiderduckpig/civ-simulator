@@ -10,10 +10,12 @@ from typing import List, Callable, Optional, Dict
 
 from .constants import (
     W, H, N, T, IMP, CAN_FARM, FOCUS, BASE_PRICES,
-    FORT_METAL_UPKEEP, CITY_HP_REGEN, N_EMPLOYEES_PER_LEVEL,
+    FORT_METAL_UPKEEP, CITY_HP_REGEN, N_EMPLOYEES_PER_LEVEL, GOLD_INCOME_MULT,
     TRADABLE_GOODS, GOV_CONSTRUCTION_PERIOD,
     MAX_TILES_PER_CITY_FOR_EXPANSION,
     TRADE_HOUSE_CAPACITY_PER_EMPLOYEE,
+    PRICE_MULT_MIN, PRICE_MULT_MAX, PRICE_CURVE_STEEPNESS,
+    PRICE_CURVE_SPAN, PRICE_CURVE_ANCHOR,
 )
 from .helpers import (
     neighbors, is_land, border_cells, dist,
@@ -72,7 +74,40 @@ from .economy_profiles import (
 
 # ── Settle scoring ─────────────────────────────────────────────────────────
 
-def _settle_score(cell, ter, rivers, res, all_city_cells, params):
+def _terrain_growth_bonus(cell, ter, rivers, res, hm, territory=None):
+    """Bias expansion toward livable terrain and lower altitude.
+
+    Lower-altitude tiles should tend to fill first so territory grows along
+    valleys and lowlands instead of forming perfectly rectangular blocks.
+    """
+    t = ter[cell]
+    score = 0.0
+
+    if hm and 0 <= cell < len(hm):
+        elev = max(0.0, min(1.0, float(hm[cell])))
+        score += (1.0 - elev) * 7.0
+
+        if territory:
+            neigh_hm = [float(hm[n]) for n in neighbors(cell) if 0 <= n < len(hm) and n in territory]
+            if neigh_hm:
+                score += max(0.0, (sum(neigh_hm) / len(neigh_hm)) - elev) * 6.0
+
+    if t in (T.PLAINS, T.GRASS):
+        score += 2.5
+    elif t in (T.FOREST, T.DFOREST, T.SWAMP, T.JUNGLE):
+        score += 1.2
+    elif t in (T.HILLS,):
+        score += 0.4
+
+    if cell_on_river(cell, rivers):
+        score += 1.5
+    if cell in res:
+        score += 1.0
+
+    return score
+
+
+def _settle_score(cell, ter, rivers, res, all_city_cells, params, hm=None):
     """Score a cell as a potential city site. Returns a float or None."""
     t = ter[cell]
     if t in (T.MTN, T.SNOW, T.DESERT) or t <= T.COAST:
@@ -106,11 +141,13 @@ def _settle_score(cell, ter, rivers, res, all_city_cells, params):
     if cell in res:
         score += 3
 
+    score += _terrain_growth_bonus(cell, ter, rivers, res, hm, set(all_city_cells) if all_city_cells else None)
+
     return score
 
 
-def _eval_settle_candidate(civ, cell, ter, rivers, res, all_city_cells, params):
-    sc = _settle_score(cell, ter, rivers, res, all_city_cells, params)
+def _eval_settle_candidate(civ, cell, ter, rivers, res, all_city_cells, params, hm=None):
+    sc = _settle_score(cell, ter, rivers, res, all_city_cells, params, hm)
     if sc is not None and sc > getattr(civ, "_settle_score", float("-inf")):
         civ._settle_candidate = cell
         civ._settle_score = sc
@@ -208,11 +245,6 @@ from .employment import staffed_level
 
 # Price curve controls. We keep 1.0x exactly at supply=demand while making
 # scarcity respond much more aggressively than before.
-PRICE_MULT_MIN = 0.05
-PRICE_MULT_MAX = 20.0
-PRICE_CURVE_STEEPNESS = 5.5
-_PRICE_CURVE_SPAN = PRICE_MULT_MAX - PRICE_MULT_MIN
-_PRICE_CURVE_ANCHOR = 1.0 + math.log((_PRICE_CURVE_SPAN / (1.0 - PRICE_MULT_MIN)) - 1.0) / PRICE_CURVE_STEEPNESS
 
 
 def _throughput_scale(employee_units: float) -> float:
@@ -231,8 +263,8 @@ def _get_price(good: str, supply: float, demand: float) -> float:
     ratio = demand / max(supply, 0.1)
     # Bounded logistic with much stronger scarcity response.
     # Anchor is derived so mult == 1.0 exactly when ratio == 1.0.
-    mult = PRICE_MULT_MIN + _PRICE_CURVE_SPAN / (
-        1.0 + math.exp(-PRICE_CURVE_STEEPNESS * (ratio - _PRICE_CURVE_ANCHOR))
+    mult = PRICE_MULT_MIN + PRICE_CURVE_SPAN / (
+        1.0 + math.exp(-PRICE_CURVE_STEEPNESS * (ratio - PRICE_CURVE_ANCHOR))
     )
     return base * mult
 
@@ -512,7 +544,7 @@ def _tick_trade(
 
                 if settle_financials:
                     buyer.gold  -= total_cost
-                    seller.gold += total_cost * 0.95
+                    seller.gold += total_cost * 0.95 * GOLD_INCOME_MULT
 
                     real_value = volume * BASE_PRICES.get(good, unit_price)
                     buyer.income_import[good]  = buyer.income_import.get(good, 0.0)  + real_value
@@ -554,7 +586,7 @@ def _tick_trade(
 
                 if record_trades:
                     buyer.last_trades.setdefault(good, []).append(
-                        (volume, seller.name, unit_price)
+                        (volume, seller.name, seller_quote)
                     )
                     seller.last_trades.setdefault(good, []).append(
                         (-volume, buyer.name, seller_quote)
@@ -567,45 +599,8 @@ def _tick_trade(
 
 # ── Settle scoring ─────────────────────────────────────────────────────────
 
-def _settle_score(cell, ter, rivers, res, all_city_cells, params):
-    """Score a cell as a potential city site. Returns a float or None."""
-    t = ter[cell]
-    if t in (T.MTN, T.SNOW, T.DESERT) or t <= T.COAST:
-        return None
-
-    score = 0.0
-
-    if all_city_cells:
-        min_d = min(dist(cell, oc) for oc in all_city_cells)
-        if min_d <= 2:
-            score -= 500
-        elif min_d <= 4:
-            score -= 80 / min_d
-        elif min_d <= 7:
-            score -= 30 / min_d
-        score += min(min_d * 0.3, 5)
-
-    if cell_river_mouth(cell, ter, rivers):
-        score += 60
-    elif cell_on_river(cell, rivers):
-        score += params.get("river_pref", 10) * 1.5
-    if cell_coastal(cell, ter):
-        score += params.get("coast_pref", 5) * 1.5
-    if t in CAN_FARM or (cell_on_river(cell, rivers) and t not in (T.DEEP, T.OCEAN, T.COAST, T.MTN, T.SNOW, T.BEACH, T.TUNDRA, T.DESERT)):
-        score += 2
-    else:
-        for n in neighbors(cell):
-            if cell_on_river(n, rivers) and t not in (T.DEEP, T.OCEAN, T.COAST, T.MTN, T.SNOW, T.BEACH, T.TUNDRA, T.DESERT):
-                score += 2
-                break
-    if cell in res:
-        score += 3
-
-    return score
-
-
-def _eval_settle_candidate(civ, cell, ter, rivers, res, all_city_cells, params):
-    sc = _settle_score(cell, ter, rivers, res, all_city_cells, params)
+def _eval_settle_candidate(civ, cell, ter, rivers, res, all_city_cells, params, hm=None):
+    sc = _settle_score(cell, ter, rivers, res, all_city_cells, params, hm)
     if sc is not None and sc > getattr(civ, "_settle_score", float("-inf")):
         civ._settle_candidate = cell
         civ._settle_score = sc
@@ -688,6 +683,7 @@ def tick_sim(
     tick:      int,
     add_event: Callable[[str], None],
     params:    dict,
+    hm:        Optional[List[float]] = None,
     good_efficiency: Optional[Dict[str, List[float]]] = None,
 ) -> List[Civ]:
     """Run one simulation step. Returns any newly-spawned civs (currently
@@ -1169,7 +1165,7 @@ def tick_sim(
                 # scale (served × base × 3.75). Decoupled from the reported
                 # income so the ledger can be symmetric with export pricing
                 # without changing treasury balance.
-                city.gold += served * base_p * 3.75
+                city.gold += served * base_p * 3.75 * GOLD_INCOME_MULT
 
                 # Domestic income is now valued at the same rate as exports
                 # (0.95 × base). Previously 0.15 × base, which made any net
@@ -1358,8 +1354,11 @@ def tick_sim(
                 # slow-moving consumption-level hysteresis.
                 level_quality = math.log1p(max(0.0, avg_level))
                 sat_gate = SAT_GATE_FLOOR + (1.0 - SAT_GATE_FLOOR) * avg_sat
+                pop = max(1.0, float(getattr(city, "population", 1) or 1))
+                unemp_rate = float(getattr(city, "unemployed_pop", 0) or 0) / pop
+                unemp_factor = max(0.2, 1.0 - unemp_rate * 2.0)
                 city.attractiveness = max(
-                    0.05, 1.0 + level_quality * LEVEL_WEIGHT * sat_gate,
+                    0.05, (1.0 + level_quality * LEVEL_WEIGHT * sat_gate) * unemp_factor,
                 )
 
             if len(cities) < 2:
@@ -1546,10 +1545,11 @@ def tick_sim(
                 if 0 <= c < N and is_land(ter, c) and om[c] == 0
                 and sum(1 for n in neighbors(c) if n in civ.territory) >= 3
             ]
+            pocket_targets.sort(key=lambda c: _terrain_growth_bonus(c, ter, rivers, res, hm, civ.territory), reverse=True)
             for c in pocket_targets:
                 civ.territory.add(c)
                 om[c] = civ.id
-                _eval_settle_candidate(civ, c, ter, rivers, res, all_city_cells, params)
+                _eval_settle_candidate(civ, c, ter, rivers, res, all_city_cells, params, hm)
                 layout_dirty = True
 
             # 2. Passive territorial creep (unconditional)
@@ -1565,6 +1565,7 @@ def tick_sim(
                         sum(1 for n in neighbors(c) if n in civ.territory) * 5
                         + (4 if c in res else 0)
                         + (params["river_pref"] * 0.5 if cell_on_river(c, rivers) else 0)
+                        + _terrain_growth_bonus(c, ter, rivers, res, hm, civ.territory)
                         + (2 if ter[c] in (T.PLAINS, T.GRASS) else 0)
                         - (3 if ter[c] >= T.MTN else 0)
                         + random.random() * 3.0
@@ -1575,7 +1576,7 @@ def tick_sim(
                     for c in targets[:cnt]:
                         civ.territory.add(c)
                         om[c] = civ.id
-                        _eval_settle_candidate(civ, c, ter, rivers, res, all_city_cells, params)
+                        _eval_settle_candidate(civ, c, ter, rivers, res, all_city_cells, params, hm)
                         layout_dirty = True
 
         before_cities = len(civ.cities)

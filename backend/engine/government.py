@@ -21,7 +21,7 @@ GOV_CONSTRUCTION_QUEUE_LIMIT = 4
 GOV_CONSTRUCTION_REVENUE_MARGIN = 1.0
 GOV_CONSTRUCTION_SPEND_MULT = 3.0
 GOV_HOSTILE_RELATION_THRESHOLD = 0.0
-UNEMPLOYMENT_BENEFIT_BASE = 0.04
+UNEMPLOYMENT_BENEFIT_BASE = 0.12
 UNEMPLOYMENT_BENEFIT_INCOME_MULT = 0.08
 
 
@@ -37,6 +37,7 @@ def reset_government_flows(gov: Government) -> None:
     gov.last_benefit_spending = 0.0
     gov.last_build_spending = 0.0
     gov.last_fort_spending = 0.0
+    gov.last_interest_charged = 0.0
 
 
 def record_government_flow(
@@ -188,6 +189,11 @@ def pay_unemployment_benefits(civ: Civ) -> float:
         total += benefit
         city.gold += benefit
         city.income_misc += benefit
+        # Record actual per-unemployed payment for use in consumption/wage
+        # accounting. When treasury is insufficient, this may be less than
+        # the nominal `per_person` value.
+        actual_per_person = benefit / unemployed if unemployed > 0 else 0.0
+        city.last_unemployment_benefit_per_person = actual_per_person
         record_government_flow(
             gov,
             kind="unemployment_benefit",
@@ -394,7 +400,38 @@ def update_fort_funding(civ: Civ) -> None:
     if not forts:
         return
     ordered = sorted(forts.items(), key=lambda kv: (kv[1].buffer, kv[0]))
-    reserve = gov.treasury
+    reserve = float(gov.treasury)
+
+    # Compute an allowable debt limit based on a simple creditworthiness
+    # heuristic: larger economies, higher recent revenue, and greater
+    # military/economic power get more favourable terms.
+    def _compute_debt_limit() -> float:
+        econ_size = 0.0
+        for city in getattr(civ, "cities", []):
+            econ_size += float(getattr(city, "economic_output", 0.0) or 0.0)
+        revenue = float(getattr(gov, "last_tax_collected", 0.0) or 0.0)
+        power = float(getattr(civ, "power", 0.0) or getattr(civ, "power", 0.0) or 0.0)
+        # Scale contributors to comparable magnitudes and ensure a floor.
+        limit = max(50.0, econ_size * 0.06 + revenue * 2.0 + power * 5.0)
+        return limit
+
+    def _compute_interest_rate() -> float:
+        # Interest rate in [min_rate, max_rate] where better credit lowers rate.
+        min_rate = 0.01
+        max_rate = 0.12
+        econ_size = 0.0
+        for city in getattr(civ, "cities", []):
+            econ_size += float(getattr(city, "economic_output", 0.0) or 0.0)
+        revenue = float(getattr(gov, "last_tax_collected", 0.0) or 0.0)
+        power = float(getattr(civ, "power", 0.0) or 0.0)
+        score = revenue + econ_size * 0.02 + power * 1.0
+        K = 200.0
+        frac = score / (score + K)
+        # Higher score -> lower rate
+        rate = min_rate + (max_rate - min_rate) * (1.0 - frac)
+        return max(min_rate, min(max_rate, rate))
+
+    debt_limit = _compute_debt_limit()
     for cell, state in ordered:
         host = fort_host_city(civ, cell)
         upkeep = fort_upkeep_value(host, gov) if host is not None else sum(
@@ -410,36 +447,20 @@ def update_fort_funding(civ: Civ) -> None:
             state.last_upkeep_value = upkeep
             continue
 
-        # Once active, a fort stays active until treasury is fully depleted.
-        if state.active:
-            if reserve <= 0.0:
-                state.buffer = min(state.buffer, gov.fort_buffer_off)
-                state.active = False
-                state.last_upkeep_value = upkeep
-                continue
+        # Allow governments to borrow up to `debt_limit`. Compute how much
+        # additional spending is allowed before hitting the limit.
+        allowed_spend = reserve + debt_limit
 
-            spend = min(upkeep, reserve)
-            reserve -= spend
-            gov.last_fort_spending += spend
-            record_government_flow(
-                gov,
-                kind="fort_upkeep",
-                label="Fort upkeep",
-                amount=spend,
-                category="expense",
-                city_cell=cell,
-                city_name=host.name if host is not None else "",
-                note=f"fort {cell}",
-            )
-            state.buffer = max(state.buffer, gov.fort_buffer_on)
-            state.active = True
+        if allowed_spend <= 0.0:
+            # No room to pay this fort — keep it inactive.
+            state.buffer = min(state.buffer, gov.fort_buffer_off)
+            state.active = False
             state.last_upkeep_value = upkeep
             continue
 
-        # Reopen now that reserve floor is met, then keep it on until zero.
-        state.active = True
-        state.buffer = max(state.buffer, gov.fort_buffer_on)
-        spend = min(upkeep, reserve)
+        # Attempt to pay full upkeep; if not enough headroom, pay up to
+        # the limit (this may push treasury negative but not beyond limit).
+        spend = min(upkeep, allowed_spend)
         reserve -= spend
         gov.last_fort_spending += spend
         record_government_flow(
@@ -452,6 +473,33 @@ def update_fort_funding(civ: Civ) -> None:
             city_name=host.name if host is not None else "",
             note=f"fort {cell}",
         )
+
+        # Fort considered active only when fully funded this tick; partial
+        # payments leave it inactive and reduce its buffer.
+        if spend >= upkeep:
+            state.buffer = max(state.buffer, gov.fort_buffer_on)
+            state.active = True
+        else:
+            state.buffer = min(state.buffer, gov.fort_buffer_off)
+            state.active = False
         state.last_upkeep_value = upkeep
         continue
     gov.treasury = reserve
+
+    # Apply interest on outstanding debt (treasury < 0). Interest rate is
+    # a function of creditworthiness so each nation gets a different rate.
+    if gov.treasury < 0.0:
+        rate = _compute_interest_rate()
+        interest = -gov.treasury * rate
+        gov.treasury -= interest
+        gov.last_interest_charged = interest
+        record_government_flow(
+            gov,
+            kind="interest",
+            label="Debt interest",
+            amount=interest,
+            category="expense",
+            city_cell=None,
+            city_name="",
+            note=f"rate {rate:.3%}",
+        )

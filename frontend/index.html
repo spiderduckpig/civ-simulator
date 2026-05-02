@@ -379,16 +379,26 @@
     #diplo-content .morale-bar span { display: block; height: 100%; }
     #diplo-content .power-list { display: flex; flex-direction: column; }
     #diplo-content .power-row {
-      display: flex; align-items: center; gap: 6px; padding: 2px 4px;
+      display: grid;
+      grid-template-columns: 13px minmax(0, 1fr) 140px 5ch;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 4px;
       font-size: 10px;
     }
     #diplo-content .power-row .dot { width: 13px; height: 13px; border-radius: 2px; }
     #diplo-content .power-row .pname { flex: 1; }
     #diplo-content .power-row .pbar {
-      display: inline-block; height: 5px; background: var(--bd-1); border-radius: 2px;
-      position: relative; overflow: hidden; min-width: 50px;
+      display: inline-block; width: 140px; height: 5px; background: var(--bd-1); border-radius: 2px;
+      position: relative; overflow: hidden; flex-shrink: 0;
     }
     #diplo-content .power-row .pbar span { display: block; height: 100%; background: var(--ac-blue); }
+    #diplo-content .power-row .pval {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum" 1;
+      min-width: 5ch;
+    }
   </style>
 </head>
 <body data-theme="inkwell">
